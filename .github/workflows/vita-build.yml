@@ -1,0 +1,63 @@
+name: vita-build
+on:
+  push:
+    branches: [main, 'feat/vpk-build']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: vita-build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  vpk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Frozen 2026.08-20260815 image; checked in the first real CI run.
+      SDK_IMAGE: vitasdk/vitasdk@sha256:7f5eee50ff95b73c8c847dbfef6227aa0035886444b4d0254c21da8369ff1efc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test native input and packaging on host (not hardware)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Itests/fixtures/vita_sdk tests/native_input_test.cpp client/src/microphone.cpp -o native_input_test
+          ./native_input_test
+          python3 -m unittest discover -s tests -p 'test_vpk.py' -v
+      - name: Fetch pinned VitaSDK image
+        run: |
+          mkdir -p build/evidence
+          docker pull "$SDK_IMAGE"
+          docker image inspect "$SDK_IMAGE" --format '{{json .RepoDigests}}' > build/evidence/sdk-image.json
+          git rev-parse HEAD > build/evidence/source-commit.txt
+      - name: Cross-compile without network or credentials
+        shell: bash
+        run: |
+          set -o pipefail
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE:/workspace" -w /workspace "$SDK_IMAGE" \
+            sh -ec 'arm-vita-eabi-g++ --version; cmake --version; cmake -S client -B build/vita -DCMAKE_BUILD_TYPE=Release; cmake --build build/vita --parallel 2; arm-vita-eabi-readelf -h build/vita/codex_vita_ui > build/evidence/elf-header.txt; find "$VITASDK" -maxdepth 5 -type f -iname "*license*" > build/evidence/sdk-license-paths.txt' \
+            2>&1 | tee build/evidence/vita-build.log
+      - name: Verify VPK and prepare test bundle
+        run: |
+          python3 scripts/verify_vpk.py build/vita/codex-vita-ui-prototype.vpk --report build/evidence/vpk-report.json
+          mkdir -p build/package
+          cp build/vita/codex-vita-ui-prototype.vpk build/package/
+          cp build/evidence/SHA256SUMS build/evidence/vpk-report.json build/evidence/source-commit.txt build/package/
+          cp docs/HARDWARE_TEST.md build/package/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: success()
+        with:
+          name: codex-vita-ui-prototype-${{ github.sha }}
+          path: build/package/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: vita-build-evidence-${{ github.sha }}
+          path: build/evidence/
+          if-no-files-found: warn
+          retention-days: 14
