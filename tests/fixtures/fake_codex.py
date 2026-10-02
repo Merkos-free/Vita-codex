@@ -4,10 +4,11 @@ import os
 import sys
 
 def emit(obj):
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    # The real JSONL wire format is UTF-8, independent of Windows console code pages.
+    sys.stdout.buffer.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+    sys.stdout.buffer.flush()
 
-for line in sys.stdin:
+for line in sys.stdin.buffer:
     request = json.loads(line)
     method, ident = request.get("method"), request.get("id")
     if ident is None:

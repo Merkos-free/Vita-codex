@@ -36,7 +36,8 @@ class LauncherTests(unittest.TestCase):
     def test_npm_shim_is_not_executed(self):
         shim, package = self.npm()
         argv = resolve_command([str(shim), "app-server"], windows=True)
-        self.assertEqual(argv, [str(self.root / "node.exe"), str(package / "bin" / "codex.js"), "app-server"])
+        self.assertEqual(argv, [str((self.root / "node.exe").resolve()),
+                                str((package / "bin" / "codex.js").resolve()), "app-server"])
         self.assertNotIn(str(shim), argv)
 
     def test_wrong_package_rejected(self):
