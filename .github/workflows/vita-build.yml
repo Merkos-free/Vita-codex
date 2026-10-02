@@ -1,0 +1,67 @@
+name: vita-build
+on:
+  push:
+    branches: [main, 'feat/vpk-build']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: vita-build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  vpk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SDK_IMAGE: vitasdk/vitasdk:2026.08-20260815
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch documented frozen VitaSDK image
+        run: |
+          mkdir -p build/evidence
+          docker pull "$SDK_IMAGE"
+          docker image inspect "$SDK_IMAGE" --format '{{json .RepoDigests}}' > build/evidence/sdk-image.json
+          git rev-parse HEAD > build/evidence/source-commit.txt
+      - name: Cross-compile without network or credentials
+        shell: bash
+        run: |
+          set -o pipefail
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            -v "$GITHUB_WORKSPACE:/workspace" -w /workspace "$SDK_IMAGE" \
+            sh -c 'arm-vita-eabi-g++ --version; cmake -S client -B build/vita -DCMAKE_BUILD_TYPE=Release && cmake --build build/vita --parallel 2' \
+            2>&1 | tee build/evidence/vita-build.log
+      - name: Check archive and executable
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, struct, zipfile
+          p = pathlib.Path('build/vita/codex-vita-ui-prototype.vpk')
+          with zipfile.ZipFile(p) as z:
+              assert z.testzip() is None
+              assert 'eboot.bin' in z.namelist()
+              assert 'sce_sys/param.sfo' in z.namelist()
+              assert z.read('eboot.bin')[:4] == b'SCE\x00'
+              assert z.read('sce_sys/param.sfo')[:4] == b'\x00PSF'
+          digest = hashlib.sha256(p.read_bytes()).hexdigest()
+          pathlib.Path('build/evidence/SHA256SUMS').write_text(digest+'  '+p.name+'\n')
+          print(json.dumps({'vpk': p.name, 'size': p.stat().st_size, 'sha256': digest, 'hardware_tested': False}))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: codex-vita-ui-prototype-${{ github.sha }}
+          path: |
+            build/vita/codex-vita-ui-prototype.vpk
+            build/evidence/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vita-build-evidence-${{ github.sha }}
+          path: build/evidence/
+          if-no-files-found: warn
+          retention-days: 14
