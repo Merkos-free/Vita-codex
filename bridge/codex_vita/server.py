@@ -7,8 +7,24 @@ import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .rpc import RpcError
+from .replay import ReplayGuard, ReplayConflict
 
 MAX_BODY = 32768
+MAX_RESPONSE = 1024 * 1024
+MUTATIONS = {"send", "newThread", "resume", "approval", "interrupt"}
+
+
+def unique_object(pairs):
+    obj = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError("Duplicate JSON key")
+        obj[key] = value
+    return obj
+
+
+def invalid_constant(_):
+    raise ValueError("Non-finite JSON number")
 
 class LimitedServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -16,8 +32,12 @@ class LimitedServer(ThreadingHTTPServer):
     def __init__(self, address, handler, bridge, pairing):
         self.slots = threading.BoundedSemaphore(8)
         self.bridge, self.pairing = bridge, pairing
+        self.replay = ReplayGuard()
         self.stop_event = threading.Event()
         super().__init__(address, handler)
+
+    def handle_error(self, request, client_address):
+        pass  # Aborted TLS clients must not dump raw request context to stderr.
 
     def process_request(self, request, client_address):
         if not self.slots.acquire(blocking=False):
@@ -54,7 +74,9 @@ class Handler(BaseHTTPRequestHandler):
         pass  # Never log PIN, Authorization, prompts, source code or account details.
 
     def _json(self, status: int, value: dict):
-        raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+        raw = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+        if len(raw) > MAX_RESPONSE:
+            status, raw = 502, b'{"error":"Response exceeds client memory budget"}'
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
@@ -81,6 +103,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._origin_ok():
             return
+        mutation = None
         try:
             if self.path not in ("/v1/pair", "/v1/action"):
                 self._json(404, {"error": "Not found"})
@@ -98,25 +121,54 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(415, {"error": "Use application/json"})
                 return
             if self.path == "/v1/action":
-                auth = self.headers.get("Authorization", "")
+                auths = self.headers.get_all("Authorization") or []
+                if len(auths) != 1:
+                    self._json(401, {"error": "Exactly one Authorization is required"})
+                    return
+                auth = auths[0]
                 if not auth.startswith("Bearer ") or not self.server.pairing.check(auth[7:]):
                     self._json(401, {"error": "Pair this device first"})
                     return
             raw = self.rfile.read(length)
             if len(raw) != length:
                 raise ValueError("Incomplete request")
-            body = json.loads(raw)
+            body = json.loads(raw, object_pairs_hook=unique_object, parse_constant=invalid_constant)
             if not isinstance(body, dict):
                 raise ValueError("Request must be an object")
             if self.path == "/v1/pair":
                 token = self.server.pairing.exchange(body.get("pin"))
-                self._json(200, {"token": token, "expiresIn": 86400})
+                self._json(200, {"token": token, "expiresIn": 86400, "protocolVersion": 2})
                 return
             operation = body.get("operation")
             if not isinstance(operation, str):
                 raise ValueError("operation must be a string")
-            result = self.server.bridge.dispatch(operation, body.get("data", {}))
+            data = body.get("data", {})
+            if not isinstance(data, dict):
+                raise ValueError("data must be an object")
+            if operation == "requestStatus":
+                self._json(200, self.server.replay.get(auth[7:], data.get("requestId")))
+                return
+            if operation in MUTATIONS:
+                request_id = body.get("requestId")
+                fresh, cached = self.server.replay.begin(auth[7:], request_id, operation, data)
+                if not fresh:
+                    self._json(cached.get("status", 409), cached.get("response", {"state": "pending"}))
+                    return
+                mutation = (auth[7:], request_id)
+            try:
+                result = self.server.bridge.dispatch(operation, data)
+            except Exception:
+                if mutation:
+                    self.server.replay.finish(*mutation, 409,
+                        {"error": "Operation outcome is unknown; inspect the existing thread. Do not resend."})
+                raise
+            if mutation:
+                self.server.replay.finish(*mutation, 200, result)
             self._json(200, result)
+        except ReplayConflict:
+            self._json(409, {"error": "Duplicate or exhausted request ledger; inspect state before continuing"})
+        except RecursionError:
+            self._json(400, {"error": "JSON nesting too deep"})
         except PermissionError as exc:
             self._json(403, {"error": str(exc)})
         except (ValueError, TypeError, KeyError, UnicodeError):

@@ -1,4 +1,4 @@
-"""Structural checks for our offline test VPK, not a hardware/security certification."""
+"""Structural checks for our connected test VPK, not a hardware/security certification."""
 from pathlib import Path
 import argparse
 import hashlib
@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 import zlib
 
 TITLE_ID = 'CVITA0001'
-VERSION = '00.11'
+VERSION = '00.20'
 IMAGES = {'sce_sys/icon0.png': (128,128),
           'sce_sys/livearea/contents/bg.png': (840,500),
           'sce_sys/livearea/contents/startup.png': (280,158)}

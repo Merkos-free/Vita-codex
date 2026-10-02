@@ -1,202 +1,151 @@
-// OFFLINE UI / HARDWARE PROBE. No network transport or Codex dictation yet.
-// Original source; not a fork of Vela or WoozyLLM. See docs/STATUS.md.
-#include "ui_model.hpp"
+// Native connected-client candidate. Hardware and account validation remain open.
+#include "../shared/ui.hpp"
 #include "microphone.hpp"
 #include "ime_text.hpp"
 #include <vita2d.h>
 #include <psp2/apputil.h>
-#include <psp2/ctrl.h>
 #include <psp2/common_dialog.h>
-#include <psp2/kernel/threadmgr/callback.h>
+#include <psp2/ctrl.h>
 #include <psp2/display.h>
 #include <psp2/ime_dialog.h>
 #include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr/callback.h>
+#include <psp2/net/net.h>
+#include <psp2/net/netctl.h>
 #include <psp2/power.h>
+#include <psp2/sysmodule.h>
 #include <psp2/touch.h>
-#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <string>
+#include <memory>
 
 namespace {
-const auto bg=RGBA8(8,12,18,255), panel=RGBA8(17,25,35,255),
-    accent=RGBA8(22,186,245,255), text=RGBA8(237,243,249,255), muted=RGBA8(156,173,191,255),
-    border=RGBA8(38,56,73,255), warn=RGBA8(246,192,95,255);
-vita2d_pgf* font=nullptr;
-cv::Model model;
+cv::Session* session=nullptr;
+cv::Ui ui;
 MicrophoneProbe mic;
-uint16_t ime_buffer[SCE_IME_DIALOG_MAX_TEXT_LENGTH+1]{};
-bool ime_active=false;
-std::vector<uint16_t> ime_initial, ime_title;
-bool power_event_seen=false;
-bool power_callback_ready=false;
-int power_event(int, int, int, void*) {
-    mic.stop(); power_event_seen=true; return 0;
+vita2d_pgf* font=nullptr;
+bool suspended=false;
+int power_event(int,int,int flags,void*) {
+    mic.stop();ui.mic_requested=false;
+    if(flags&(SCE_POWER_CB_SYSTEM_SUSPEND|SCE_POWER_CB_SYSTEM_RESUMING|SCE_POWER_CB_SYSTEM_RESUME|SCE_POWER_CB_APP_RESUME))suspended=true;
+    return 0;
 }
-int max_scroll=0;
-std::string notice;
-const char* titles[]={"Обзор","Чат","Файлы","Голос","Настройки"};
-void label(float x,float y,const std::string& s,unsigned color=text,float scale=1.05f) {
-    vita2d_pgf_draw_text(font,x,y,color,scale,s.c_str());
-}
-void box(cv::Rect r,unsigned color,int radius=10) {
+unsigned rgba(unsigned c){return RGBA8((c>>16)&255,(c>>8)&255,c&255,255);}
+void box(cv::Rect r,unsigned c,int radius=8){
+    auto color=rgba(c);
     vita2d_draw_rectangle(r.x+radius,r.y,r.w-radius*2,r.h,color);
     vita2d_draw_rectangle(r.x,r.y+radius,r.w,r.h-radius*2,color);
-    vita2d_draw_fill_circle(r.x+radius,r.y+radius,radius,color);
-    vita2d_draw_fill_circle(r.x+r.w-radius,r.y+radius,radius,color);
-    vita2d_draw_fill_circle(r.x+radius,r.y+r.h-radius,radius,color);
-    vita2d_draw_fill_circle(r.x+r.w-radius,r.y+r.h-radius,radius,color);
+    for(int x:{r.x+radius,r.x+r.w-radius})for(int y:{r.y+radius,r.y+r.h-radius})vita2d_draw_fill_circle(x,y,radius,color);
 }
-int paragraph(const std::string& s,int y,unsigned color=muted) {
-    auto lines=cv::wrap(s,850.0f,[](const auto& str){return vita2d_pgf_text_width(font,1.05f,str.c_str());});
-    int top=y;
-    for (const auto& line:lines) {
-        if (y>=185 && y<=458) label(50,y,line,color);
-        y+=29;
-    }
-    max_scroll=std::max(max_scroll,top+model.scroll+int(lines.size())*29-455);
-    return y;
-}
-void begin_ime() {
-    if (ime_active) return;
+cv::Input input=cv::Input::None;
+uint16_t ime_buffer[SCE_IME_DIALOG_MAX_TEXT_LENGTH+1]{};
+std::vector<uint16_t> initial,title;
+void begin_input(cv::Input kind){
+    if(kind==cv::Input::None||input!=cv::Input::None)return;
+    const std::string value=kind==cv::Input::Draft?session->draft:kind==cv::Input::Endpoint?session->endpoint:"";
+    title=cv::to_ime(kind==cv::Input::Draft?"Задание для Codex":kind==cv::Input::Endpoint?"HTTPS-адрес компьютера":"Одноразовый код с компьютера",SCE_IME_DIALOG_MAX_TITLE_LENGTH);
+    initial=cv::to_ime(value,SCE_IME_DIALOG_MAX_TEXT_LENGTH);
     std::memset(ime_buffer,0,sizeof ime_buffer);
-    SceImeDialogParam p; sceImeDialogParamInit(&p);
+    SceImeDialogParam p;sceImeDialogParamInit(&p);
     p.supportedLanguages=SCE_IME_LANGUAGE_ENGLISH|SCE_IME_LANGUAGE_RUSSIAN;
-    p.languagesForced=SCE_FALSE;
-    p.type=SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
-    p.textBoxMode=SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
-    ime_title=cv::to_ime("Черновик задания", SCE_IME_DIALOG_MAX_TITLE_LENGTH);
-    ime_initial=cv::to_ime(model.draft, SCE_IME_DIALOG_MAX_TEXT_LENGTH);
-    p.title=ime_title.data();
-    p.initialText=ime_initial.data();
-    p.dialogMode=SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
-    p.maxTextLength=SCE_IME_DIALOG_MAX_TEXT_LENGTH;
-    p.inputTextBuffer=ime_buffer;
-    int r=sceImeDialogInit(&p);
-    if (r<0) notice="Не удалось открыть клавиатуру. Проверьте сборку на Vita.";
-    else ime_active=true;
+    p.languagesForced=SCE_FALSE;p.type=SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
+    p.textBoxMode=SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;p.dialogMode=SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
+    p.title=title.data();p.initialText=initial.data();p.maxTextLength=kind==cv::Input::Pin?6:SCE_IME_DIALOG_MAX_TEXT_LENGTH;p.inputTextBuffer=ime_buffer;
+    if(sceImeDialogInit(&p)<0)session->notice="Не удалось открыть клавиатуру";else input=kind;
 }
-void poll_ime() {
-    if (!ime_active || sceImeDialogGetStatus()!=SCE_COMMON_DIALOG_STATUS_FINISHED) return;
-    SceImeDialogResult result{};
-    const int status=sceImeDialogGetResult(&result);
-    if (status>=0 && result.result>=0 && result.button==SCE_IME_DIALOG_BUTTON_ENTER) {
-        model.draft=cv::utf16_to_utf8(ime_buffer,SCE_IME_DIALOG_MAX_TEXT_LENGTH);
-        notice="Черновик сохранён в памяти. Не отправлен."; model.scroll=0;
-    } else notice="Ввод отменён. Черновик сохранён без изменений.";
-    sceImeDialogTerm(); ime_active=false;
-    std::memset(ime_buffer,0,sizeof ime_buffer);
-    std::fill(ime_initial.begin(),ime_initial.end(),0); ime_initial.clear();
+void poll_input(){
+    if(input==cv::Input::None||sceImeDialogGetStatus()!=SCE_COMMON_DIALOG_STATUS_FINISHED)return;
+    SceImeDialogResult r{};
+    if(sceImeDialogGetResult(&r)>=0&&r.result>=0&&r.button==SCE_IME_DIALOG_BUTTON_ENTER)ui.apply_text(*session,input,cv::utf16_to_utf8(ime_buffer,SCE_IME_DIALOG_MAX_TEXT_LENGTH));
+    sceImeDialogTerm();input=cv::Input::None;
+    std::memset(ime_buffer,0,sizeof ime_buffer);std::fill(initial.begin(),initial.end(),0);initial.clear();
 }
-void draw_screen() {
-    vita2d_start_drawing(); vita2d_clear_screen();
-    label(24,42,"< >  CODEX VITA",text,1.30f);
-    label(420,40,"OFFLINE / UI PROTOTYPE",warn,0.95f);
-    char b[24]; std::snprintf(b,sizeof b,"%d%%",scePowerGetBatteryLifePercent());
-    label(869,40,b,muted,0.95f);
-    for (int i=0;i<cv::screen_count;++i) {
-        bool selected=i==int(model.screen);
-        box(cv::tab_rect(i),selected?accent:panel);
-        label(float(42+i*184),109,titles[i],selected?bg:text);
+void load_connection(){
+    session->ca_file="ux0:data/vita-codex/ca.pem";
+    FILE* f=std::fopen("ux0:data/vita-codex/connection.json","rb");if(!f)return;
+    char data[1025];size_t n=std::fread(data,1,sizeof data,f);std::fclose(f);
+    try{if(n>1024)throw std::runtime_error("size");auto j=cv::parse_json(std::string(data,n));auto e=j.at("endpoint").str();if(cv::valid_endpoint(e))session->endpoint=e;}
+    catch(...){session->notice="Некорректный connection.json; введите адрес вручную";}
+}
+struct Network {
+    void* memory=nullptr;bool initialized=false,control=false,loaded=false;
+    Network(){
+        loaded=sceSysmoduleLoadModule(SCE_SYSMODULE_NET)>=0;if(!loaded)return;
+        memory=std::calloc(1,2*1024*1024);if(!memory)return;
+        SceNetInitParam p{};p.memory=memory;p.size=2*1024*1024;p.flags=0;
+        initialized=sceNetInit(&p)>=0;if(initialized)control=sceNetCtlInit()>=0;
     }
-    box(cv::content,panel);
-    max_scroll=0;
-    int y=190-model.scroll;
-    switch(model.screen) {
-        case cv::Screen::Overview:
-            y=paragraph("Нативный клиент управления Codex",y,text);
-            y=paragraph("Первый этап: интерфейс и локальная проверка ввода. Компьютер не подключён; проекты и результаты не выдумываются.",y+12);
-            y=paragraph("Связь Vita с bridge ещё нужно реализовать и проверить. На ПК уже есть исходники bridge и автоматические тесты его протокола.",y+12);
-            paragraph("L / R — вкладки. Touch — выбор вкладки. Up / Down — прокрутка.",y+12);
-            break;
-        case cv::Screen::Chat:
-            y=paragraph("Черновик задания",y,text);
-            y=paragraph(model.draft.empty()?"Нажмите X, чтобы проверить системную клавиатуру Vita. Текст пока не отправляется никуда.":model.draft,y+16,text);
-            paragraph("X — редактировать черновик. Отправка отключена до подключения проверенного bridge.",y+18,warn);
-            break;
-        case cv::Screen::Files:
-            y=paragraph("Изменения файлов",y,text);
-            y=paragraph("Нет подключённой сессии. В этом экране не показывается синтетический diff как настоящий результат Codex.",y+12);
-            paragraph("Будущий просмотр: весь экран под код, переключение файлов, увеличение текста. Изменения уже могут быть в рабочей папке: кнопки Apply здесь не будет.",y+12);
-            break;
-        case cv::Screen::Voice:
-            y=paragraph("Встроенная диктовка Codex: ещё не проверена",y,text);
-            y=paragraph("Это тест микрофона, НЕ распознавание. Обрабатывается один короткий блок звука, затем он стирается. Запись не сохраняется; сеть не используется.",y+12);
-            y=paragraph("X — включить / остановить тест, не дольше 10 секунд. Отдельный платный API отсутствует.",y+12);
-            if (model.scroll==0) {
-                box({50,405,860,34},border,6);
-                int w=int(mic.level()*848);
-                if(w>0) vita2d_draw_rectangle(56,411,w,22,accent);
-                label(50,473,mic.active()?"Микрофон активен":(mic.error()?"Ошибка микрофона — нужна проверка на устройстве":"Микрофон выключен"),mic.active()?accent:muted,0.9f);
-            }
-            break;
-        case cv::Screen::Settings:
-            y=paragraph("Параметры первого этапа",y,text);
-            y=paragraph("Тема: тёмная. Рендер: VitaSDK + libvita2d. Разрешение: 960 x 544. Шрифт: системный, без поставки сторонних файлов шрифтов.",y+12);
-            y=paragraph("Аккаунт OpenAI и ключи на Vita не сохраняются. Сетевое сопряжение в этом UI ещё не реализовано.",y+12);
-            paragraph("Для соединения планируется HTTPS с проверкой сертификата и одноразовый PIN с экрана компьютера. Без кнопки отключения TLS-проверки.",y+12);
-            break;
-    }
-    vita2d_draw_rectangle(0,488,960,56,bg);
-    label(24,523,notice.empty()?"L/R вкладки   X действие   SELECT очистить   START выход":notice,muted,0.83f);
-    vita2d_end_drawing();
-    if(ime_active) vita2d_common_dialog_update();
-    vita2d_swap_buffers();
-    sceDisplayWaitVblankStart();
+    ~Network(){if(control)sceNetCtlTerm();if(initialized)sceNetTerm();std::free(memory);if(loaded)sceSysmoduleUnloadModule(SCE_SYSMODULE_NET);}
+};
 }
-} // namespace
-int main() {
-    SceAppUtilInitParam init{}; SceAppUtilBootParam boot{};
-    if (sceAppUtilInit(&init,&boot)<0) return 1;
-    if(vita2d_init()<0) {sceAppUtilShutdown(); return 2;}
-    SceCommonDialogConfigParam dialog_config{};
-    sceCommonDialogSetConfigParam(&dialog_config);
-    vita2d_set_clear_color(bg);
-    font=vita2d_load_default_pgf();
-    if(!font) {vita2d_fini(); sceAppUtilShutdown(); return 3;}
-    sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
-    sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT,SCE_TOUCH_SAMPLING_STATE_START);
-    const SceUID power_cb=sceKernelCreateCallback("CodexVitaPower",0,power_event,nullptr);
-    power_callback_ready=power_cb>=0 && scePowerRegisterCallback(power_cb)>=0;
-    uint32_t previous=0; bool previous_touch=false, running=true;
-    uint64_t next_scroll=0;
-    while(running) {
-        power_event_seen=false; sceKernelCheckCallback();
-        SceCtrlData pad{}; sceCtrlPeekBufferPositive(0,&pad,1);
-        uint32_t pressed=pad.buttons&~previous; previous=pad.buttons;
-        const bool was_ime_active=ime_active;
-        poll_ime();
-        if(power_event_seen) notice="Событие питания: микрофон остановлен.";
-        if(!ime_active && !was_ime_active && !power_event_seen) {
-            int old=int(model.screen);
-            if(pressed&SCE_CTRL_LTRIGGER) model.navigate(-1);
-            if(pressed&SCE_CTRL_RTRIGGER) model.navigate(1);
-            SceTouchData touch{}; sceTouchPeek(SCE_TOUCH_PORT_FRONT,&touch,1);
-            if(touch.reportNum && !previous_touch) {
-                int x=touch.report[0].x/2, y=touch.report[0].y/2;
-                for(int i=0;i<cv::screen_count;++i) if(cv::inside(cv::tab_rect(i),x,y)) model.select(i);
+int main(){
+    SceAppUtilInitParam init{};SceAppUtilBootParam boot{};
+    if(sceAppUtilInit(&init,&boot)<0)return 1;
+    if(vita2d_init()<0){sceAppUtilShutdown();return 2;}
+    font=vita2d_load_default_pgf();if(!font){vita2d_fini();sceAppUtilShutdown();return 3;}
+    vita2d_set_clear_color(rgba(cv::Background));
+    sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT,SCE_TOUCH_SAMPLING_STATE_START);
+    auto cb=sceKernelCreateCallback("codex-vita-power",0,power_event,nullptr);
+    bool callback_ready=cb>=0&&scePowerRegisterCallback(cb)>=0;
+    try{
+        Network network;
+        cv::Session connection;session=&connection;load_connection();
+        if(!network.control)connection.notice="Сеть не инициализирована. Интерфейс доступен офлайн.";
+        uint32_t previous=0;bool touch_before=false,running=true;
+        uint64_t last=sceKernelGetProcessTimeWide(),next_poll=0,next_repeat=0;
+        while(running){
+            sceKernelCheckCallback();uint64_t now=sceKernelGetProcessTimeWide();
+            if(suspended||now-last>2000000){connection.suspend();mic.stop();ui.mic_requested=false;suspended=false;}
+            unsigned elapsed=unsigned(std::min<uint64_t>((now-last)/1000,100));last=now;
+            connection.poll();poll_input();
+            if(connection.ready&&now>=next_poll&&input==cv::Input::None){connection.refresh();next_poll=now+750000;}
+            auto scene=ui.draw(connection,[](const std::string& text,int size){return vita2d_pgf_text_width(font,float(size)/20.0f,text.c_str());});
+            SceCtrlData pad{};sceCtrlPeekBufferPositive(0,&pad,1);auto pressed=pad.buttons&~previous;previous=pad.buttons;
+            if(input==cv::Input::None){
+                if(pressed&SCE_CTRL_START)running=false;
+                if(pressed&SCE_CTRL_LTRIGGER){ui.tab(-1);mic.stop();}
+                if(pressed&SCE_CTRL_RTRIGGER){ui.tab(1);mic.stop();}
+                if(pressed&SCE_CTRL_CIRCLE){if(ui.page==cv::Page::Projects){ui.threads_mode=false;ui.list_selected=ui.focus=0;}else ui.jump(cv::Page::Projects);mic.stop();}
+                if(pressed&SCE_CTRL_SELECT){if(!connection.uncertain.empty())connection.reconcile();connection.refresh();}
+                if(now>=next_repeat&&(pad.buttons&(SCE_CTRL_UP|SCE_CTRL_DOWN))){
+                    int dir=(pad.buttons&SCE_CTRL_DOWN)?1:-1;
+                    if(ui.page==cv::Page::Projects){const auto count=ui.threads_mode?connection.threads.size():connection.projects.size();if(count){ui.list_selected=std::clamp(ui.list_selected+dir,0,int(count)-1);ui.focus=ui.list_selected%5;}}
+                    else ui.scroll=std::clamp(ui.scroll+dir*28,0,ui.max_scroll);
+                    next_repeat=now+110000;ui.hold.select_accept(false);
+                }
+                scene=ui.draw(connection,[](const std::string& text,int size){return vita2d_pgf_text_width(font,float(size)/20.0f,text.c_str());});
+                if(!scene.buttons.empty()){
+                    if(pressed&SCE_CTRL_LEFT)ui.focus=(ui.focus+int(scene.buttons.size())-1)%int(scene.buttons.size());
+                    if(pressed&SCE_CTRL_RIGHT)ui.focus=(ui.focus+1)%int(scene.buttons.size());
+                    ui.focus=std::clamp(ui.focus,0,int(scene.buttons.size())-1);
+                    const auto& b=scene.buttons[size_t(ui.focus)];
+                    if(pressed&SCE_CTRL_CROSS)begin_input(ui.activate(connection,b));
+                    if(b.hold&&b.enabled){if(!ui.hold.accept_selected)ui.hold.select_accept(true);if(ui.hold.update(pad.buttons&SCE_CTRL_CROSS,elapsed))ui.activate(connection,b,true);}
+                    else ui.hold.select_accept(false);
+                }
+                SceTouchData touch{};sceTouchPeek(SCE_TOUCH_PORT_FRONT,&touch,1);
+                if(touch.reportNum&&!touch_before){int x=touch.report[0].x/2,y=touch.report[0].y/2;
+                    for(int i=0;i<6;++i)if(cv::inside({16+156*i,58,148,40},x,y)){ui.jump(static_cast<cv::Page>(i));mic.stop();}
+                    for(size_t i=0;i<scene.buttons.size();++i)if(cv::inside(scene.buttons[i].rect,x,y)){ui.focus=int(i);begin_input(ui.activate(connection,scene.buttons[i]));}
+                }
+                touch_before=touch.reportNum!=0;
+                if(ui.mic_requested&&!mic.active()){if(callback_ready){mic.start();}else{connection.notice="Микрофон отключён: power callback недоступен";ui.mic_requested=false;}}
+                if(!ui.mic_requested)mic.stop();
+                mic.tick();if(ui.mic_requested&&!mic.active())ui.mic_requested=false;
             }
-            previous_touch=touch.reportNum!=0;
-            if(old!=int(model.screen)) {mic.stop(); notice.clear();}
-            uint64_t now=sceKernelGetProcessTimeWide();
-            if(now>=next_scroll) {
-                if(pad.buttons&SCE_CTRL_UP) {model.scroll_by(-29,max_scroll); next_scroll=now+110000;}
-                if(pad.buttons&SCE_CTRL_DOWN) {model.scroll_by(29,max_scroll); next_scroll=now+110000;}
-            }
-            if(pressed&SCE_CTRL_CROSS) {
-                if(model.screen==cv::Screen::Chat) begin_ime();
-                if(model.screen==cv::Screen::Voice) {if(mic.active()) mic.stop(); else if(power_callback_ready) mic.start(); else notice="Нет системного callback: микрофон отключён.";}
-            }
-            if(pressed&SCE_CTRL_SELECT) {model.draft.clear(); mic.stop(); notice="Локальные черновик и запись очищены.";}
-            if(pressed&SCE_CTRL_START) running=false;
-            mic.tick();
+            vita2d_start_drawing();vita2d_clear_screen();
+            for(const auto& p:scene.panels){if(p.first.w<16)vita2d_draw_rectangle(p.first.x,p.first.y,p.first.w,p.first.h,rgba(p.second));else box(p.first,p.second);}
+            for(size_t i=0;i<scene.buttons.size();++i){const auto& b=scene.buttons[i];box(b.rect,b.enabled?(int(i)==ui.focus?cv::Accent:0x243447):0x1b232c);vita2d_pgf_draw_text(font,b.rect.x+12,b.rect.y+26,rgba(b.enabled&&int(i)==ui.focus?cv::Background:cv::Muted),0.9f,b.title.c_str());}
+            for(const auto& t:scene.text)vita2d_pgf_draw_text(font,t.x,t.y,rgba(t.color),float(t.size)/20.0f,t.value.c_str());
+            if(ui.page==cv::Page::Voice&&mic.active())vita2d_draw_rectangle(32,448,int(880*mic.level()),7,rgba(cv::Accent));
+            if(ui.hold.held_ms)vita2d_draw_rectangle(304,514,int(340*ui.hold.held_ms/1500),4,rgba(cv::Positive));
+            vita2d_end_drawing();if(input!=cv::Input::None)vita2d_common_dialog_update();vita2d_swap_buffers();sceDisplayWaitVblankStart();
         }
-        draw_screen();
-    }
-    mic.stop();
-    if(power_callback_ready) scePowerUnregisterCallback(power_cb);
-    if(power_cb>=0) sceKernelDeleteCallback(power_cb);
-    if(ime_active) {sceImeDialogAbort(); sceImeDialogTerm();}
-    vita2d_wait_rendering_done(); vita2d_free_pgf(font); vita2d_fini();
-    sceAppUtilShutdown(); sceKernelExitProcess(0); return 0;
+        connection.disconnect();session=nullptr;
+    }catch(...){session=nullptr;}
+    mic.stop();if(input!=cv::Input::None)sceImeDialogTerm();
+    if(callback_ready)scePowerUnregisterCallback(cb);
+    if(cb>=0)sceKernelDeleteCallback(cb);
+    vita2d_wait_rendering_done();vita2d_free_pgf(font);vita2d_fini();sceAppUtilShutdown();sceKernelExitProcess(0);return 0;
 }
