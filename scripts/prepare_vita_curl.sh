@@ -7,8 +7,11 @@ archive="$PWD/build/deps/curl-8.17.0.tar.gz"
 printf '%s  %s\n' e8e74cdeefe5fb78b3ae6e90cd542babf788fa9480029cfcee6fd9ced42b7910 "$archive" | sha256sum -c -
 mkdir -p build/deps/src build/network
 if [ ! -d build/deps/src/curl-8.17.0 ]; then tar xzf "$archive" -C build/deps/src; fi
+# Vita OpenSSL omits UI_OpenSSL. Disable curl engine/provider console UI through
+# its upstream compile-time guard; CA, peer and hostname verification stay enabled.
 cmake -S build/deps/src/curl-8.17.0 -B build/deps/curl-build \
   -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+  -DCMAKE_C_FLAGS=-DOPENSSL_NO_UI_CONSOLE \
   -DCMAKE_INSTALL_PREFIX="$PWD/build/network" -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_CURL_EXE=OFF -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF \
   -DENABLE_IPV6=OFF -DCURL_DISABLE_SOCKETPAIR=ON -DHAVE_FCNTL_O_NONBLOCK=OFF \
