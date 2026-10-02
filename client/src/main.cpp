@@ -1,10 +1,13 @@
-// M0 OFFLINE UI / HARDWARE PROBE. No network transport or Codex dictation yet.
+// OFFLINE UI / HARDWARE PROBE. No network transport or Codex dictation yet.
 // Original source; not a fork of Vela or WoozyLLM. See docs/STATUS.md.
 #include "ui_model.hpp"
 #include "microphone.hpp"
+#include "ime_text.hpp"
 #include <vita2d.h>
 #include <psp2/apputil.h>
 #include <psp2/ctrl.h>
+#include <psp2/common_dialog.h>
+#include <psp2/kernel/threadmgr/callback.h>
 #include <psp2/display.h>
 #include <psp2/ime_dialog.h>
 #include <psp2/kernel/processmgr.h>
@@ -24,6 +27,12 @@ cv::Model model;
 MicrophoneProbe mic;
 uint16_t ime_buffer[SCE_IME_DIALOG_MAX_TEXT_LENGTH+1]{};
 bool ime_active=false;
+std::vector<uint16_t> ime_initial, ime_title;
+bool power_event_seen=false;
+bool power_callback_ready=false;
+int power_event(int, int, int, void*) {
+    mic.stop(); power_event_seen=true; return 0;
+}
 int max_scroll=0;
 std::string notice;
 const char* titles[]={"Обзор","Чат","Файлы","Голос","Настройки"};
@@ -56,8 +65,11 @@ void begin_ime() {
     p.languagesForced=SCE_FALSE;
     p.type=SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
     p.textBoxMode=SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
-    p.title=u"Новый черновик задания";
-    p.initialText=u"";
+    ime_title=cv::to_ime("Черновик задания", SCE_IME_DIALOG_MAX_TITLE_LENGTH);
+    ime_initial=cv::to_ime(model.draft, SCE_IME_DIALOG_MAX_TEXT_LENGTH);
+    p.title=ime_title.data();
+    p.initialText=ime_initial.data();
+    p.dialogMode=SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
     p.maxTextLength=SCE_IME_DIALOG_MAX_TEXT_LENGTH;
     p.inputTextBuffer=ime_buffer;
     int r=sceImeDialogInit(&p);
@@ -66,13 +78,15 @@ void begin_ime() {
 }
 void poll_ime() {
     if (!ime_active || sceImeDialogGetStatus()!=SCE_COMMON_DIALOG_STATUS_FINISHED) return;
-    SceImeDialogResult result{}; sceImeDialogGetResult(&result);
-    if (result.button==SCE_IME_DIALOG_BUTTON_ENTER) {
+    SceImeDialogResult result{};
+    const int status=sceImeDialogGetResult(&result);
+    if (status>=0 && result.result>=0 && result.button==SCE_IME_DIALOG_BUTTON_ENTER) {
         model.draft=cv::utf16_to_utf8(ime_buffer,SCE_IME_DIALOG_MAX_TEXT_LENGTH);
-        notice="Черновик только в памяти. Он НЕ отправлен в Codex.";
-    }
+        notice="Черновик сохранён в памяти. Не отправлен."; model.scroll=0;
+    } else notice="Ввод отменён. Черновик сохранён без изменений.";
     sceImeDialogTerm(); ime_active=false;
     std::memset(ime_buffer,0,sizeof ime_buffer);
+    std::fill(ime_initial.begin(),ime_initial.end(),0); ime_initial.clear();
 }
 void draw_screen() {
     vita2d_start_drawing(); vita2d_clear_screen();
@@ -98,7 +112,7 @@ void draw_screen() {
         case cv::Screen::Chat:
             y=paragraph("Черновик задания",y,text);
             y=paragraph(model.draft.empty()?"Нажмите X, чтобы проверить системную клавиатуру Vita. Текст пока не отправляется никуда.":model.draft,y+16,text);
-            paragraph("X — новый черновик вместо текущего. Отправка отключена до подключения проверенного bridge.",y+18,warn);
+            paragraph("X — редактировать черновик. Отправка отключена до подключения проверенного bridge.",y+18,warn);
             break;
         case cv::Screen::Files:
             y=paragraph("Изменения файлов",y,text);
@@ -107,7 +121,7 @@ void draw_screen() {
             break;
         case cv::Screen::Voice:
             y=paragraph("Встроенная диктовка Codex: ещё не проверена",y,text);
-            y=paragraph("Это тест микрофона, НЕ распознавание. Аудио остаётся в оперативной памяти Vita и стирается при остановке; сеть не используется.",y+12);
+            y=paragraph("Это тест микрофона, НЕ распознавание. Обрабатывается один короткий блок звука, затем он стирается. Запись не сохраняется; сеть не используется.",y+12);
             y=paragraph("X — включить / остановить тест, не дольше 10 секунд. Отдельный платный API отсутствует.",y+12);
             if (model.scroll==0) {
                 box({50,405,860,34},border,6);
@@ -135,18 +149,25 @@ int main() {
     SceAppUtilInitParam init{}; SceAppUtilBootParam boot{};
     if (sceAppUtilInit(&init,&boot)<0) return 1;
     if(vita2d_init()<0) {sceAppUtilShutdown(); return 2;}
+    SceCommonDialogConfigParam dialog_config{};
+    sceCommonDialogSetConfigParam(&dialog_config);
     vita2d_set_clear_color(bg);
     font=vita2d_load_default_pgf();
     if(!font) {vita2d_fini(); sceAppUtilShutdown(); return 3;}
     sceCtrlSetSamplingMode(SCE_CTRL_MODE_ANALOG);
     sceTouchSetSamplingState(SCE_TOUCH_PORT_FRONT,SCE_TOUCH_SAMPLING_STATE_START);
+    const SceUID power_cb=sceKernelCreateCallback("CodexVitaPower",0,power_event,nullptr);
+    power_callback_ready=power_cb>=0 && scePowerRegisterCallback(power_cb)>=0;
     uint32_t previous=0; bool previous_touch=false, running=true;
     uint64_t next_scroll=0;
     while(running) {
+        power_event_seen=false; sceKernelCheckCallback();
         SceCtrlData pad{}; sceCtrlPeekBufferPositive(0,&pad,1);
         uint32_t pressed=pad.buttons&~previous; previous=pad.buttons;
+        const bool was_ime_active=ime_active;
         poll_ime();
-        if(!ime_active) {
+        if(power_event_seen) notice="Событие питания: микрофон остановлен.";
+        if(!ime_active && !was_ime_active && !power_event_seen) {
             int old=int(model.screen);
             if(pressed&SCE_CTRL_LTRIGGER) model.navigate(-1);
             if(pressed&SCE_CTRL_RTRIGGER) model.navigate(1);
@@ -164,7 +185,7 @@ int main() {
             }
             if(pressed&SCE_CTRL_CROSS) {
                 if(model.screen==cv::Screen::Chat) begin_ime();
-                if(model.screen==cv::Screen::Voice) {if(mic.active()) mic.stop(); else mic.start();}
+                if(model.screen==cv::Screen::Voice) {if(mic.active()) mic.stop(); else if(power_callback_ready) mic.start(); else notice="Нет системного callback: микрофон отключён.";}
             }
             if(pressed&SCE_CTRL_SELECT) {model.draft.clear(); mic.stop(); notice="Локальные черновик и запись очищены.";}
             if(pressed&SCE_CTRL_START) running=false;
@@ -173,7 +194,9 @@ int main() {
         draw_screen();
     }
     mic.stop();
-    if(ime_active) sceImeDialogTerm();
+    if(power_callback_ready) scePowerUnregisterCallback(power_cb);
+    if(power_cb>=0) sceKernelDeleteCallback(power_cb);
+    if(ime_active) {sceImeDialogAbort(); sceImeDialogTerm();}
     vita2d_wait_rendering_done(); vita2d_free_pgf(font); vita2d_fini();
     sceAppUtilShutdown(); sceKernelExitProcess(0); return 0;
 }
