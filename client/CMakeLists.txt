@@ -12,8 +12,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(codex_vita_ui src/main.cpp src/microphone.cpp shared/https.cpp)
 target_compile_options(codex_vita_ui PRIVATE -Wall -Wextra -Werror -finput-charset=UTF-8)
+set(CV_CURL_LIBRARY curl)
+if(DEFINED CV_NETWORK_PREFIX)
+  set(CV_CURL_LIBRARY "${CV_NETWORK_PREFIX}/lib/libcurl.a")
+  target_include_directories(codex_vita_ui BEFORE PRIVATE "${CV_NETWORK_PREFIX}/include")
+endif()
 target_link_libraries(codex_vita_ui
-  vita2d png jpeg curl ssl crypto zstd z m
+  -Wl,--start-group vita2d png jpeg ${CV_CURL_LIBRARY} ssl crypto zstd z m stdc++ pthread -Wl,--end-group
   SceDisplay_stub SceGxm_stub SceSysmodule_stub SceCtrl_stub SceTouch_stub
   ScePgf_stub ScePvf_stub SceCommonDialog_stub SceIme_stub SceAppUtil_stub SceAppMgr_stub
   SceNet_stub SceNetCtl_stub SceHttp_stub SceSsl_stub SceIofilemgr_stub

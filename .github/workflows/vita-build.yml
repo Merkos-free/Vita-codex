@@ -32,13 +32,18 @@ jobs:
           docker pull "$SDK_IMAGE"
           docker image inspect "$SDK_IMAGE" --format '{{json .RepoDigests}}' > build/evidence/sdk-image.json
           git rev-parse HEAD > build/evidence/source-commit.txt
+      - name: Fetch pinned curl source to repair mismatched SDK binary
+        run: |
+          mkdir -p build/deps
+          curl --fail --location --proto '=https' --tlsv1.2 https://github.com/curl/curl/releases/download/curl-8_17_0/curl-8.17.0.tar.gz -o build/deps/curl-8.17.0.tar.gz
+          echo 'e8e74cdeefe5fb78b3ae6e90cd542babf788fa9480029cfcee6fd9ced42b7910  build/deps/curl-8.17.0.tar.gz' | sha256sum -c -
       - name: Cross-compile without network or credentials
         shell: bash
         run: |
           set -o pipefail
           docker run --rm --network none --user "$(id -u):$(id -g)" \
             -v "$GITHUB_WORKSPACE:/workspace" -w /workspace "$SDK_IMAGE" \
-            sh -ec 'arm-vita-eabi-g++ --version; cmake --version; cmake -S client -B build/vita -DCMAKE_BUILD_TYPE=Release; cmake --build build/vita --parallel 2; arm-vita-eabi-readelf -h build/vita/codex_vita_ui > build/evidence/elf-header.txt; find "$VITASDK" -maxdepth 5 -type f -iname "*license*" > build/evidence/sdk-license-paths.txt' \
+            sh -ec 'arm-vita-eabi-g++ --version; cmake --version; sh scripts/prepare_vita_curl.sh; cmake -S client -B build/vita -DCMAKE_BUILD_TYPE=Release -DCV_NETWORK_PREFIX=/workspace/build/network; cmake --build build/vita --parallel 2; arm-vita-eabi-readelf -h build/vita/codex_vita_ui > build/evidence/elf-header.txt; find "$VITASDK" -maxdepth 5 -type f -iname "*license*" > build/evidence/sdk-license-paths.txt' \
             2>&1 | tee build/evidence/vita-build.log
       - name: Verify VPK and prepare test bundle
         run: |

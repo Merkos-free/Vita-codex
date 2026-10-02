@@ -9,6 +9,58 @@ concurrency:
   group: connected-client-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  native-network:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install host-only build libraries
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libsdl2-dev libsdl2-ttf-dev
+      - name: Compile same network model and protocol probe as Vita
+        run: |
+          mkdir -p build/host
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/network_model_test.cpp client/shared/https.cpp $(pkg-config --cflags --libs libcurl) -o build/host/network-model
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic client/host/probe.cpp client/shared/https.cpp $(pkg-config --cflags --libs libcurl) -o build/host/probe
+          build/host/network-model
+      - name: Native HTTPS end-to-end (explicit fake Codex, no account)
+        env:
+          CV_NATIVE_PROBE: ${{ github.workspace }}/build/host/probe
+        run: python3 tests/native_e2e.py -v
+      - name: Build desktop renderer with the same UI components
+        run: g++ -std=c++17 -Wall -Wextra -Werror -pedantic client/host/desktop.cpp client/shared/https.cpp $(pkg-config --cflags --libs sdl2 SDL2_ttf libcurl) -o build/host/codex-vita-desktop
+      - name: Capture explicit fixture screens (NOT Vita hardware)
+        env:
+          SDL_VIDEODRIVER: dummy
+        run: build/host/codex-vita-desktop --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf --capture build/host/screens
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: desktop-fixture-screens-${{ github.sha }}
+          path: build/host/screens/
+          retention-days: 7
+          if-no-files-found: error
+  official-codex-no-account:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install official pinned Codex package (not into user's computer)
+        run: npm install --ignore-scripts --no-audit --no-fund --prefix .ci-codex @openai/codex@0.155.1
+      - name: Read schema and initialize, never submit a turn
+        run: python scripts/codex_smoke.py .ci-codex/node_modules/@openai/codex/bin/codex.js build/codex-no-account.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: codex-no-account-${{ matrix.os }}-${{ github.sha }}
+          path: build/codex-no-account.json
+          retention-days: 7
+          if-no-files-found: error
   source-snapshot:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -16,8 +68,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Archive tracked source only (no credentials or working files)
-        run: git archive --format=zip HEAD -o source.zip
+      - run: git archive --format=zip HEAD -o source.zip
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: connected-client-source-${{ github.sha }}
