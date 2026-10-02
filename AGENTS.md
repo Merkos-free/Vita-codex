@@ -15,29 +15,25 @@
 - Консервативный default read-only; разрешения не повышаются автоматически при несовместимости протокола.
 - Схема установленного Codex важнее примеров документации. Проверять конкретные поля, а не совпадения enum во всём JSON.
 
-## Состояние после M1 cross-build
+## Автономная разработка после 00.20
 
-72 Python tests (55 bridge/compatibility + 17 packaging), 35 grouped UI-model checks, 23 grouped native-input checks. Реальная ARM-кросс-сборка VPK 00.11 прошла; скачанный пакет повторно проверен. Точные коммит, CI runs, digest SDK и SHA-256 в docs/M1_BUILD_RESULTS.md. Это НЕ аппаратная проверка и НЕ работа с аккаунтом владельца. Native HTTPS и штатная диктовка ещё не написаны.
+Владелец явно разрешил продолжать без промежуточной аппаратной проверки. Не останавливать написание UI, сети, host-интеграции и CI ради фото приставки. Но не закрывать аппаратные пункты #2/#4 и аккаунтные пункты #3 без реального подтверждения.
 
-## Следующее
+Общий C++ Session/HTTPS/Ui написан, desktop renderer использует те же компоненты. Протокол bridge v2, requestId обязателен для мутаций. Журнал в RAM не делает persistent exactly-once после перезапуска: старые токены отзываются, отсутствие записи не разрешает автоповтор. Статус активной/неизвестной сессии при resume не должен становиться idle.
 
-1. Проверять CI конкретного HEAD; прежний успешный прогон не доказывает последующие коммиты.
-2. Hardware smoke-test по docs/HARDWARE_TEST.md; не закрывать #2 по одной компиляции. Не ставить firmware/plugins и не перезаписывать чужой Title ID.
-3. Реальный Codex на Windows: doctor, ChatGPT-login, read-only scratch thread, проверка эффективных разрешений (#3).
-4. Асинхронный native HTTPS с лимитами JSON, проверкой сертификата, сопряжением и восстановлением после разрыва без повторного исполнения (#4).
-5. Штатная диктовка как отдельный gate (#5), без платной запасной реализации.
-6. Перед стабильным публичным релизом закончить аудит лицензий статически включаемых библиотек/нотисов и аппаратную матрицу. Текущий artifact — тестовый, не stable release.
+Официальный Codex 0.155.1 проверяется в CI Windows/Linux только на schema/initialize/account=null, без turn/start. Сквозной модельный сценарий использует отдельный явный fixture. Штатная диктовка отключена, voiceValidated=false.
+
+## Следующие автономные задачи
+
+1. Проверять CI конкретного HEAD, затем безопасно объединять PR. Не переносить успех прошлой сборки на новый код.
+2. Полировать читаемость/навигацию, добавить тесты состояния UI, ограниченное кэширование и просмотр diff по файлам. Desktop fixture не выдавать за Vita screenshot.
+3. Добавить графическую Windows-оболочку/пакет установки поверх существующего setup/bridge без автоматического firewall, платных ресурсов и копирования секретов. Сейчас есть CLI-помощник, не готовая EXE.
+4. Исследовать поддерживаемую штатную Dictate-функцию отдельно от Realtime audio. Не подменять требование другим распознавателем.
+5. Аппаратный/аккаунтный тест выполнить позже по решению владельца; не менять firmware/plugins. До него сохранять hardware_tested=false, запрет production и неподтверждённую эффективную sandbox-изоляцию.
+6. Аудит точных статических зависимостей, их лицензий и нотиcов нужен отдельно. Публичность репозитория не задаёт лицензию оригинального кода.
 
 ## Проверки
 
-```sh
-python -m unittest discover -s tests -v
-g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/ui_model_test.cpp -o ui_model_test
-./ui_model_test
-g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Itests/fixtures/vita_sdk tests/native_input_test.cpp client/src/microphone.cpp -o native_input_test
-./native_input_test
-```
+Базовые команды в README. `.github/workflows/network-tests.yml` собирает общий C++ клиент, запускает HTTPS E2E, официальный Codex без аккаунта и desktop capture. `.github/workflows/vita-build.yml` пересобирает hash-pinned curl и создаёт VPK в pinned SDK без сети. SDK doubles только в host-тестах, не в include path настоящей Vita-сборки.
 
-Vita build: `.github/workflows/vita-build.yml` и docs/BUILD.md. SDK doubles используются только в host-тесте, никогда в include path настоящего клиента. Проверка VPK: `python scripts/verify_vpk.py build/vita/codex-vita-ui-prototype.vpk`.
-
-Обновлять docs/STATUS.md после этапа. Не менять отчёты на «успех», пока соответствующие проверки не выполнены. Старые docs/TEST_RESULTS.md и docs/test-run.txt относятся к bootstrap-этапу; M1 имеет отдельный датированный отчёт.
+Обновлять docs/STATUS.md и результаты конкретного этапа. Исторические docs/TEST_RESULTS.md, docs/M1_BUILD_RESULTS.md не переписывать задним числом. Не публиковать PEM/private keys, device tokens, auth.json, аудио или личные проектные данные.

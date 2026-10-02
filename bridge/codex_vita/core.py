@@ -15,7 +15,7 @@ TEXT_LIMIT = 64 * 1024
 class Bridge:
     def __init__(self, rpc, projects: Projects, approval_policy="onRequest", sandbox="readOnly"):
         if approval_policy not in ("onRequest", "on-request"):
-            raise ValueError("Only on-request approvals are supported; retired untrusted modes are rejected")
+            raise ValueError("Only on-request approvals are supported; other modes are intentionally disabled")
         if sandbox not in ("readOnly", "read-only", "workspaceWrite", "workspace-write"):
             raise ValueError("Only read-only or explicitly configured workspace-write is allowed")
         self.rpc, self.projects = rpc, projects
@@ -122,6 +122,8 @@ class Bridge:
                 raise ValueError("Invalid thread id")
             if operation == "resume":
                 # Read and verify cwd before resuming or overriding any settings.
+                with self._lock:
+                    fresh_view = thread not in self.views
                 stored = self.rpc.request("thread/read", {"threadId": thread, "includeTurns": False})
                 self._remember(project, stored["thread"])
                 result = self.rpc.request("thread/resume", {"threadId": thread, **self._settings(project)})
@@ -129,8 +131,26 @@ class Bridge:
                 with self._lock:
                     self.views[thread]["text"] = self._history_text(result["thread"])
                     self.views[thread]["messages"], self.views[thread]["historyTruncated"] = history.from_thread(result["thread"])
-                    # Stored turns alone cannot establish that an interrupted connection is idle.
-                    # Preserve unknown/running state rather than clearing the duplicate-send guard.
+                    # A newly resumed thread may already have an active turn. Never
+                    # present it as idle merely because this bridge just started.
+                    view = self.views[thread]
+                    if fresh_view and view["status"] == "idle":
+                        restored = result["thread"]
+                        turns = restored.get("turns", [])
+                        last = turns[-1] if turns else {}
+                        live = restored.get("status", {})
+                        kind = live.get("type") if isinstance(live, dict) else live
+                        view["turnId"] = last.get("id")
+                        if kind == "active" or last.get("status") == "inProgress":
+                            view["status"] = "inProgress"
+                        elif kind in ("systemError", "notLoaded"):
+                            view["status"] = "unknown"
+                        elif not turns:
+                            view["status"] = "idle"
+                        else:
+                            status = last.get("status")
+                            view["status"] = status if status in ("completed", "interrupted", "failed") else "unknown"
+                    # Existing unknown/running views are intentionally never reset here.
                 return {"threadId": thread}
             self._scope(project, thread)
             if operation == "send":

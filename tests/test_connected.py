@@ -110,3 +110,23 @@ class ConnectedCoreTests(unittest.TestCase):
         result=self.bridge.dispatch('status', {})
         self.assertEqual(result['protocolVersion'], 2)
         self.assertFalse(result['voice']['enabled'])
+
+    def test_fresh_resume_restores_active_turn(self):
+        original = self.rpc.request
+        def request(method, params):
+            result = original(method, params)
+            if method == 'thread/resume':
+                result['thread']['turns'] = [{'id': 'running', 'status': 'inProgress', 'items': []}]
+            return result
+        self.rpc.request = request
+        self.bridge.dispatch('resume', {'project': 'p1', 'thread': 't1'})
+        self.assertEqual(self.bridge.views['t1']['status'], 'inProgress')
+        self.assertEqual(self.bridge.views['t1']['turnId'], 'running')
+        with self.assertRaises(ValueError):
+            self.bridge.dispatch('send', {'project':'p1','thread':'t1','text':'Do not duplicate'})
+
+    def test_resume_does_not_clear_unknown(self):
+        self.open()
+        self.bridge.views['t1']['status'] = 'unknown'
+        self.bridge.dispatch('resume', {'project':'p1','thread':'t1'})
+        self.assertEqual(self.bridge.views['t1']['status'], 'unknown')
