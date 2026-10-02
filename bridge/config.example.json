@@ -1,0 +1,16 @@
+{
+  "host": "127.0.0.1",
+  "port": 8765,
+  "codexCommand": [
+    "codex"
+  ],
+  "approvalPolicy": "onRequest",
+  "sandbox": "readOnly",
+  "projects": [
+    {
+      "id": "demo",
+      "name": "Тестовый проект",
+      "path": "C:/Projects/codex-vita-test"
+    }
+  ]
+}

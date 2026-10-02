@@ -1,18 +1,67 @@
 # Codex Vita
 
-Native PS Vita remote client for a locally installed Codex, with a companion bridge on the computer.
+Неофициальный нативный пульт PS Vita для Codex на компьютере.
+Репозиторий владельца: `Merkos-free/Vita-codex`. Создан владельцем публичным; видимость не менялась.
 
-## Status
+**Статус: исходники прототипа, не готовая VPK.** Python-посредник и офлайн-интерфейс Vita пока не соединены. Нет подтверждённой работы на настоящей Vita или с аккаунтом владельца.
 
-Repository initialized. The starter implementation is being imported on a separate development branch. This is not a released or hardware-tested application.
+## Требования
 
-## Requirements
+Нативный тёмный интерфейс 960×544, кнопки и touch. Официальный Codex работает на Windows; авторизация ChatGPT остаётся на компьютере. На Vita нет языковой модели или OpenAI-ключей.
 
-- A native, controller-friendly dark interface for PS Vita.
-- Codex runs on the user's computer; account credentials remain there.
-- ChatGPT/Codex sign-in only; no separately billed OpenAI API integration.
-- Built-in Codex dictation is a research gate, not a promised working feature. No paid speech-to-text fallback.
-- Explicit confirmation for command execution and file changes.
-- No secrets, personal configuration, or audio recordings in Git.
+Голос должен использовать встроенную диктовку самого Codex, без отдельного платного Speech-to-Text API. Сейчас голос **не реализован**: тест микрофона локальный, автоматической подмены другим распознавателем нет. Отсутствие API-кода не гарантирует безлимитность подписки.
 
-Unofficial community project; not affiliated with OpenAI or Sony.
+## Состав
+
+- `bridge/codex_vita/`: ограниченный JSONL-адаптер app-server, проекты, сессии, текстовые задания, события, diff и одноразовые подтверждения; локальный HTTP/HTTPS-сервер с сопряжением.
+- `client/`: исходники VitaSDK/libvita2d, пять вкладок, системная клавиатура и локальный индикатор микрофона. Сетевого клиента пока нет.
+- `tests/`: тесты без аккаунта и модельных запросов. Подставной Codex явно отмечен как fixture.
+- `docs/`: состояние, архитектура, дизайн, голос, риски и последовательность продолжения.
+
+## Проверки
+
+Python 3.11+, g++ с C++17. Сторонних Python-зависимостей нет.
+
+```sh
+python -m unittest discover -s tests -v
+g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/ui_model_test.cpp -o ui_model_test
+./ui_model_test
+```
+
+На Linux проверены **55 Python-тестов** и **35 сгруппированных проверок C++**. Это не тестирование настоящего Codex/Windows/Vita. TLS-тест использует временный сертификат; без OpenSSL он пропускается. GitHub CI проверяет исходники, а не собирает VPK.
+
+## Первый запуск на Windows: только отдельный тестовый проект
+
+Установить официальный Codex и самостоятельно войти через ChatGPT на компьютере. Не передавать токены в чат или репозиторий.
+
+```powershell
+$env:PYTHONPATH = Join-Path $PWD 'bridge'
+python -m codex_vita.doctor --codex codex --output .local/capabilities.json
+```
+
+`doctor` запускает только локальные команды версии/генерации схемы; модель не вызывается. Для стандартного npm `codex.cmd` определяется соседний пакет `@openai/codex`, затем запускается `node.exe` и `bin/codex.js` напрямую: batch-файл не исполняется, `shell=True` не используется. Это проверка структуры установки, не криптографическая проверка издателя. Нестандартная установка требует явного пути к исполняемому файлу.
+
+Скопировать `bridge/config.example.json` в `.local/config.json`. Указать существующую абсолютную тестовую папку. Взять точные `approvalPolicy`/`sandbox` из полей схемы своей версии. Пример использует `onRequest` и `readOnly`; сборки со значениями `on-request` и `read-only` настраиваются явно. Старая политика `untrusted`/`unlessTrusted` отклоняется. Сервер не стартует при несовпадении проверенных полей схемы. Никакого автоматического повышения разрешений.
+
+```powershell
+python run_bridge.py --config .local/config.json
+```
+
+По умолчанию только loopback и режим read-only. `workspaceWrite`/`workspace-write` включается только локальным изменением конфигурации; команды внутри разрешённой области могут не требовать отдельного подтверждения. Приложение не обещает подтверждение каждого действия. Эффективную изоляцию установленного Codex необходимо проверить отдельно до реальных проектов.
+
+LAN требует сертификата, HTTPS, доверия сертификату на клиенте и проверки firewall. Не выставлять посредник в интернет. API-ключи OpenAI удаляются из среды дочернего процесса; авторизация аккаунта проверяется через официальный app-server.
+
+## Сборка Vita — ещё не проверена
+
+```sh
+cmake -S client -B build/vita
+cmake --build build/vita
+```
+
+Нужны VitaSDK/libvita2d. В этом этапе кросс-компилятор не запускался; возможны ошибки SDK/linker. Title ID `CVITA0001` предварительный. Художественные макеты не считаются скриншотами готового приложения.
+
+## Продолжение
+
+Начать с `AGENTS.md` и `docs/STATUS.md`. Никаких действий с чужими репозиториями, платных ресурсов, секретов или force-push. Старый скрипт создания `codex-vita` больше не нужен: работа ведётся в уже созданном `Vita-codex` обычными коммитами.
+
+Не связан с OpenAI или Sony. Лицензия на оригинальный код пока не выбрана владельцем; публичная видимость сама по себе не устанавливает лицензию. Сторонние шрифты и исходники Vela не включены.
