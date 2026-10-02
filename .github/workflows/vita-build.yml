@@ -15,16 +15,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      # Frozen 2026.08-20260815 image; resolved and checked in first CI run.
+      # Frozen 2026.08-20260815 image; checked in the first real CI run.
       SDK_IMAGE: vitasdk/vitasdk@sha256:7f5eee50ff95b73c8c847dbfef6227aa0035886444b4d0254c21da8369ff1efc
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Test native input logic on host (not hardware)
+      - name: Test native input and packaging on host (not hardware)
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Itests/fixtures/vita_sdk tests/native_input_test.cpp client/src/microphone.cpp -o native_input_test
           ./native_input_test
+          python3 -m unittest discover -s tests -p 'test_vpk.py' -v
       - name: Fetch pinned VitaSDK image
         run: |
           mkdir -p build/evidence
@@ -37,32 +38,20 @@ jobs:
           set -o pipefail
           docker run --rm --network none --user "$(id -u):$(id -g)" \
             -v "$GITHUB_WORKSPACE:/workspace" -w /workspace "$SDK_IMAGE" \
-            sh -c 'arm-vita-eabi-g++ --version; cmake --version; cmake -S client -B build/vita -DCMAKE_BUILD_TYPE=Release && cmake --build build/vita --parallel 2' \
+            sh -ec 'arm-vita-eabi-g++ --version; cmake --version; cmake -S client -B build/vita -DCMAKE_BUILD_TYPE=Release; cmake --build build/vita --parallel 2; arm-vita-eabi-readelf -h build/vita/codex_vita_ui > build/evidence/elf-header.txt; find "$VITASDK" -maxdepth 5 -type f -iname "*license*" > build/evidence/sdk-license-paths.txt' \
             2>&1 | tee build/evidence/vita-build.log
-      - name: Check archive and executable
+      - name: Verify VPK and prepare test bundle
         run: |
-          python3 - <<'PY'
-          import hashlib, json, pathlib, zipfile
-          p = pathlib.Path('build/vita/codex-vita-ui-prototype.vpk')
-          with zipfile.ZipFile(p) as z:
-              assert z.testzip() is None
-              assert 'eboot.bin' in z.namelist()
-              assert 'sce_sys/param.sfo' in z.namelist()
-              assert z.read('eboot.bin')[:4] == b'SCE\x00'
-              assert z.read('sce_sys/param.sfo')[:4] == b'\x00PSF'
-              assert 'sce_sys/icon0.png' in z.namelist()
-              assert 'sce_sys/livearea/contents/template.xml' in z.namelist()
-          digest = hashlib.sha256(p.read_bytes()).hexdigest()
-          pathlib.Path('build/evidence/SHA256SUMS').write_text(digest+'  '+p.name+'\n')
-          print(json.dumps({'vpk': p.name, 'size': p.stat().st_size, 'sha256': digest, 'hardware_tested': False}))
-          PY
+          python3 scripts/verify_vpk.py build/vita/codex-vita-ui-prototype.vpk --report build/evidence/vpk-report.json
+          mkdir -p build/package
+          cp build/vita/codex-vita-ui-prototype.vpk build/package/
+          cp build/evidence/SHA256SUMS build/evidence/vpk-report.json build/evidence/source-commit.txt build/package/
+          cp docs/HARDWARE_TEST.md build/package/
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: success()
         with:
           name: codex-vita-ui-prototype-${{ github.sha }}
-          path: |
-            build/vita/codex-vita-ui-prototype.vpk
-            build/evidence/SHA256SUMS
+          path: build/package/
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

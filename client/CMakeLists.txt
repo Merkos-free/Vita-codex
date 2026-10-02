@@ -15,7 +15,7 @@ target_compile_options(codex_vita_ui PRIVATE -Wall -Wextra -Werror -finput-chars
 target_link_libraries(codex_vita_ui
   vita2d png jpeg z m
   SceDisplay_stub SceGxm_stub SceSysmodule_stub SceCtrl_stub SceTouch_stub
-  ScePgf_stub ScePvf_stub SceCommonDialog_stub SceIme_stub SceAppUtil_stub
+  ScePgf_stub ScePvf_stub SceCommonDialog_stub SceIme_stub SceAppUtil_stub SceAppMgr_stub
   ScePower_stub SceAudioIn_stub SceKernelThreadMgr_stub SceLibKernel_stub)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(ASSET_DIR "${CMAKE_CURRENT_BINARY_DIR}/assets")
