@@ -34,4 +34,17 @@ jobs:
           persist-credentials: false
       - run: g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/ui_model_test.cpp -o ui_model_test
       - run: ./ui_model_test
+      - name: Archive tracked source only (no credentials or local files)
+        run: |
+          mkdir -p build/source-snapshot
+          git archive --format=zip HEAD -o build/source-snapshot/source.zip
+          git rev-parse HEAD > build/source-snapshot/commit.txt
+          git rev-parse HEAD^{tree} > build/source-snapshot/tree.txt
+          cd build/source-snapshot && sha256sum source.zip > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tracked-source-${{ github.sha }}
+          path: build/source-snapshot/
+          retention-days: 14
+          if-no-files-found: error
 # Host tests only. No real Codex account, model call, Vita cross-build or hardware test.
