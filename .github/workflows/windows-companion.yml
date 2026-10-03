@@ -22,6 +22,8 @@ jobs:
           python-version: '3.13'
       - name: Test lifecycle, TLS and public export (explicit fake Codex)
         run: python -m unittest discover -s tests -p test_companion.py -v
+      - name: Verify real Tk configuration selection and window layout
+        run: python scripts/gui_contract_check.py
       - name: Build unsigned portable folder on Windows
         run: |
           python -m pip install --only-binary=:all: pyinstaller==6.22.3

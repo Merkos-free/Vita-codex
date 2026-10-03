@@ -24,6 +24,7 @@ class Window:
         self.timer = None
         self.exporting = False
         self.export_result = None
+        self._last_controller_config = ""
         self.root.title('Codex Vita — Bridge для компьютера (тестовая версия)')
         self.root.geometry('1000x750')
         self.root.minsize(960, 720)
@@ -155,7 +156,9 @@ class Window:
         names = {'idle':'ВЫКЛЮЧЕНО', 'preparing':'ПОДГОТОВКА', 'prepared':'НАСТРОЙКИ ГОТОВЫ', 'starting':'ПРОВЕРКА CODEX',
                  'running':'BRIDGE ЗАПУЩЕН', 'stopping':'ОСТАНОВКА', 'stopped':'ВЫКЛЮЧЕНО', 'error':'НЕ ПОДКЛЮЧЕНО'}
         self.status.set(names[state.phase]); self.message.set(state.message)
-        if state.config and state.phase in ('prepared', 'running'): self.config.set(state.config)
+        if state.config and state.phase in ('prepared', 'running') and state.config != self._last_controller_config:
+            self.config.set(state.config)
+            self._last_controller_config = state.config
         if state.endpoint: self.endpoint.set(state.endpoint)
         self.pin.set(state.pin or '— — — — — —')
         self.expiry.set(f'Код действует ещё {state.seconds} с.' if state.pin else

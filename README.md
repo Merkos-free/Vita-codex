@@ -21,7 +21,13 @@ HTTPS реализован через общий libcurl multi-клиент. О�
 - `tests/`: модульные проверки и реальный HTTPS-стенд с явно обозначенным JSONL test double.
 - `scripts/`: инспектор VPK, pinned curl build и проверка официального Codex без аккаунта.
 
-## Подготовка Windows — позднее, когда потребуется реальное подключение
+## Графическая программа для Windows
+
+Добавлен **Windows Companion**: выбор IP и тестовой папки, подготовка публичного комплекта для Vita, запуск/остановка Bridge и одноразовый код. Исходники: `python run_companion.py`. GitHub Actions собирает переносимую папку **CodexVitaBridge** с EXE и проверяет открытие настоящего окна без аккаунта. Подготовка соединения и запуск — отдельные действия; программа не меняет firewall и не входит за владельца.
+
+Python/Tk включены в portable-пакет; официальный Codex (и Node при npm-установке) и OpenSSL для сертификата остаются внешними зависимостями. Режим GUI — только read-only. Это unsigned тестовый кандидат, не установщик и не стабильный релиз. Не отключать защиту Windows. Подробности: `docs/WINDOWS_COMPANION.md`.
+
+## Подготовка Windows через командную строку — альтернативный путь
 
 Нужны Python 3.11+, официальный Codex с самостоятельным ChatGPT-login и локальный OpenSSL для создания сертификата. Пример ниже не запускается автоматически: укажите собственный LAN IPv4 и отдельную тестовую папку. Не вводите пароли или OpenAI API-ключи в Vita.
 
@@ -52,7 +58,7 @@ g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Itests/fixtures/vita_sdk tests/n
 ```sh
 mkdir -p build/host
 g++ -std=c++17 -Wall -Wextra -Werror -pedantic client/host/probe.cpp client/shared/https.cpp $(pkg-config --cflags --libs libcurl) -o build/host/probe
-CV_NATIVE_PROBE="$PWD/build/host/probe" python tests/native_e2e.py -v
+CV_NATIVE_PROBE="$PWD/build/host/probe" python tests/native_ordering_e2e.py -v
 g++ -std=c++17 -Wall -Wextra -Werror -pedantic client/host/desktop.cpp client/shared/https.cpp $(pkg-config --cflags --libs sdl2 SDL2_ttf libcurl) -o build/host/codex-vita-desktop
 build/host/codex-vita-desktop --font /path/to/installed/font.ttf --endpoint https://127.0.0.1:8765 --ca /path/to/public-ca.pem
 ```
@@ -67,6 +73,6 @@ build/host/codex-vita-desktop --font /path/to/installed/font.ttf --endpoint http
 
 ## Открытые этапы
 
-Физическая Vita (Wi-Fi/TLS, IME, микрофон, power/suspend, производительность), настоящий аккаунт и sandbox, полноценный Windows GUI/EXE, полировка/просмотр diff по файлам, штатная диктовка, аудит зависимостей и лицензий перед стабильным распространением. Не подключать чувствительные production-проекты. Подробнее: `AGENTS.md`, `docs/STATUS.md`, `docs/ROADMAP.md`, `SECURITY.md`.
+Физическая Vita (Wi-Fi/TLS, IME, микрофон, power/suspend, производительность), настоящий аккаунт и sandbox, проверка Windows Companion с аккаунтом владельца и при разных DPI, полировка/просмотр diff по файлам, штатная диктовка, аудит зависимостей и лицензий перед стабильным распространением. Не подключать чувствительные production-проекты. Подробнее: `AGENTS.md`, `docs/STATUS.md`, `docs/ROADMAP.md`, `SECURITY.md`.
 
 Не связан с OpenAI или Sony. Оригинальный код пока без выбранной владельцем лицензии. Сторонние шрифты, Vela/WoozyLLM и бинарник Codex не включены.
