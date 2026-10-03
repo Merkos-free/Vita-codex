@@ -20,7 +20,7 @@
 
 ## Текущая реализация
 
-Общий C++ Session/HTTPS/Ui и SDL desktop renderer; VPK 00.20. Bridge protocol v2 с обязательным requestId мутаций. Журнал только RAM, не exactly-once после перезапуска. Не повторять неизвестную операцию; токены отзываются после остановки. Snapshot revision fencing не позволяет старому idle-снимку разрешить отправку после нового задания.
+Общий C++ Session/HTTPS/Ui и SDL desktop renderer; VPK-кандидат 00.21. Bridge protocol v2 с обязательным requestId мутаций. Журнал только RAM, не exactly-once после перезапуска. Не повторять неизвестную операцию; токены отзываются после остановки. Snapshot revision fencing не позволяет старому idle-снимку разрешить отправку после нового задания.
 
 Windows Companion: `run_companion.py`, `companion.py` и `gui.py`; одно рабочее выполнение, thread-safe immutable status, Tk обновляется только на главном потоке. Остановка отзывает токены, но не обещает rollback или убийство всех фоновых процессов. ZIP для Vita содержит только CA, endpoint, fingerprint. GUI-окно не запускает сервер/логин/модель автоматически.
 
@@ -28,10 +28,14 @@ Windows Companion: `run_companion.py`, `companion.py` и `gui.py`; одно ра
 
 - `python -m unittest discover -s tests -v` — 121 тест на этапе companion.
 - C++ ui_model_test: 35 grouped checks; native_input_test: 23 checks с SDK doubles, не устройство.
-- network-tests.yml: общий C++ клиент, HTTPS E2E через native_ordering_e2e.py, официальный Codex 0.155.1 без аккаунта и шесть маркированных desktop BMP.
+- network-tests.yml: общий C++ клиент, HTTPS E2E через native_ordering_e2e.py, официальный Codex 0.155.1 без аккаунта и восемь маркированных desktop BMP.
 - windows-companion.yml: real Tk contract-test, Windows portable build и запуск готовой EXE в idle. Codex/Node/OpenSSL не поставляются в этом пакете. Файлы шрифтов запрещены проверкой пакета.
 - vita-build.yml: hash-pinned curl/SDK, компиляция без сети/credentials, VPK validator. SDK doubles не попадают в настоящий include path.
 
 Перед merge проверить CI конкретного HEAD. Обновлять STATUS/PR реальными результатами, не переписывать исторические отчёты как текущие. Полный лицензионный аудит перед stable остаётся открытым.
 
-Следующие автономные задачи: per-file diff/поиск, UI-state/layout тесты, улучшение диагностики, исследование штатной Dictate-функции. Не пересоздавать существующие компоненты и не раздувать количество UI-фреймворков без необходимости.
+Следующие автономные задачи: дополнительные UI-state/layout тесты и читаемость, улучшение диагностики, исследование штатной Dictate-функции. Не пересоздавать существующие компоненты и не раздувать количество UI-фреймворков без необходимости.
+
+## Следующий этап UI
+
+Diff/поиск уже реализованы в client/shared/diff.hpp и Ui. Читать docs/DIFF_REVIEW.md. Не начинать их заново. Сохранять read-only отображение; не применять patch на Vita. Новые тесты запускаются network-tests.yml вместе с существующим E2E. Hardware/account/dictation остаются открытыми.

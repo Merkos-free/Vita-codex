@@ -48,7 +48,7 @@ void fixture(cv::Session& s){
     s.view=cv::Json::obj({{"status",cv::Json("completed")},{"messages",cv::Json::list({
         cv::Json::obj({{"role",cv::Json("user")},{"text",cv::Json("Проверь тестовый проект и покажи изменения.")}}),
         cv::Json::obj({{"role",cv::Json("assistant")},{"text",cv::Json("Это пример для проверки интерфейса. Реальный Codex не запускался.")}})})},
-        {"diff",cv::Json("--- a/example.ts\n+++ b/example.ts\n-const balance = Number(value);\n+const balance = BigInt(value);\n\nТестовый diff. Файлы не изменялись.")},
+        {"diff",cv::Json("diff --git a/example.ts b/example.ts\n--- a/example.ts\n+++ b/example.ts\n@@ -1 +1 @@\n-const balance = Number(value);\n+const balance = BigInt(value);\ndiff --git a/tests/example.test.ts b/tests/example.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/example.test.ts\n@@ -0,0 +1,2 @@\n+// Тестовые данные, модель не вызывалась.\n+expect(balance).toBe(42n);")},
         {"approvals",cv::Json::list({cv::Json::obj({{"id",cv::Json("fixture-approval")},{"details",cv::Json("{\n  \"command\": \"echo test-fixture\",\n  \"note\": \"Не выполняется\"\n}")}})})}});
 }
 int main(int argc,char** argv){
@@ -61,15 +61,20 @@ int main(int argc,char** argv){
         if(!capture.empty()){
             fixture(s);std::filesystem::create_directories(capture);
             for(int i=0;i<6;++i){ui.jump(static_cast<cv::Page>(i));auto scene=ui.draw(s,measure);r.draw(scene,ui.focus,true);r.save(std::filesystem::path(capture)/(std::to_string(i)+".bmp"));SDL_RenderPresent(r.renderer);}
-            std::cout<<"Six desktop fixture captures; NOT device screenshots\n";return 0;
+            ui.jump(cv::Page::Files);auto scene=ui.draw(s,measure);
+            for(const auto& b:scene.buttons)if(b.command==cv::Command::File){ui.activate(s,b);break;}
+            scene=ui.draw(s,measure);r.draw(scene,ui.focus,true);r.save(std::filesystem::path(capture)/"6-file-detail.bmp");
+            ui.apply_text(s,cv::Input::Search,"balance");scene=ui.draw(s,measure);r.draw(scene,ui.focus,true);r.save(std::filesystem::path(capture)/"7-diff-search.bmp");
+            std::cout<<"Eight desktop fixture captures; NOT device screenshots\n";return 0;
         }
         bool running=true;cv::Input input=cv::Input::None;std::string buffer;
         Uint32 last=SDL_GetTicks(),next_poll=0;
-        auto activate=[&](const cv::Button& b,bool held=false){auto kind=ui.activate(s,b,held);if(kind!=cv::Input::None){input=kind;buffer=kind==cv::Input::Draft?s.draft:kind==cv::Input::Endpoint?s.endpoint:"";SDL_StartTextInput();}if(b.command==cv::Command::Mic){ui.mic_requested=false;s.notice="Микрофонный индикатор доступен только на Vita";}};
+        auto activate=[&](const cv::Button& b,bool held=false){auto kind=ui.activate(s,b,held);if(kind!=cv::Input::None){input=kind;buffer=ui.initial_text(s,kind);SDL_StartTextInput();}if(b.command==cv::Command::Mic){ui.mic_requested=false;s.notice="Микрофонный индикатор доступен только на Vita";}};
         while(running){
             Uint32 now=SDL_GetTicks();unsigned elapsed=std::min(100u,now-last);last=now;s.poll();if(now>=next_poll){s.refresh();next_poll=now+750;}
             auto scene=ui.draw(s,measure);SDL_Event e;
             while(SDL_PollEvent(&e)){
+                scene=ui.draw(s,measure);
                 if(e.type==SDL_QUIT){running=false;continue;}
                 if(e.type==SDL_WINDOWEVENT&&e.window.event==SDL_WINDOWEVENT_FOCUS_LOST){s.suspend();ui.hold.select_accept(false);}
                 if(input!=cv::Input::None){
@@ -81,12 +86,16 @@ int main(int argc,char** argv){
                 if(e.type==SDL_KEYDOWN&&!e.key.repeat){
                     auto k=e.key.keysym.sym;
                     if(k>=SDLK_F1&&k<=SDLK_F6)ui.jump(static_cast<cv::Page>(k-SDLK_F1));
-                    else if(k==SDLK_ESCAPE){if(ui.page==cv::Page::Projects){ui.threads_mode=false;ui.list_selected=0;}else ui.jump(cv::Page::Projects);}
-                    else if(k==SDLK_TAB&&!scene.buttons.empty())ui.focus=(ui.focus+1)%int(scene.buttons.size());
-                    else if(k==SDLK_UP||k==SDLK_DOWN){int d=k==SDLK_DOWN?1:-1;if(ui.page==cv::Page::Projects){auto n=ui.threads_mode?s.threads.size():s.projects.size();if(n){ui.list_selected=std::clamp(ui.list_selected+d,0,int(n)-1);ui.focus=ui.list_selected%5;}}else ui.scroll=std::clamp(ui.scroll+d*28,0,ui.max_scroll);}
+                    else if(k==SDLK_ESCAPE)ui.back();
+                    else if(k==SDLK_TAB&&!scene.buttons.empty())ui.focus_by(1,scene.buttons.size());
+                    else if(k==SDLK_UP||k==SDLK_DOWN)ui.vertical(s,k==SDLK_DOWN?1:-1);
                     else if(k==SDLK_RETURN&&!scene.buttons.empty())activate(scene.buttons[size_t(ui.focus)]);
                 }
-                if(e.type==SDL_MOUSEBUTTONDOWN){for(int i=0;i<6;++i)if(cv::inside({16+156*i,58,148,40},e.button.x,e.button.y))ui.jump(static_cast<cv::Page>(i));for(size_t i=0;i<scene.buttons.size();++i)if(cv::inside(scene.buttons[i].rect,e.button.x,e.button.y)){ui.focus=int(i);activate(scene.buttons[i]);}}
+                if(e.type==SDL_MOUSEBUTTONDOWN){
+                    auto kind=ui.tap(s,scene,e.button.x,e.button.y);
+                    if(kind!=cv::Input::None){input=kind;buffer=ui.initial_text(s,kind);SDL_StartTextInput();}
+                    if(ui.mic_requested){ui.mic_requested=false;s.notice="Микрофонный индикатор доступен только на Vita";}
+                }
             }
             scene=ui.draw(s,measure);
             if(input==cv::Input::None&&!scene.buttons.empty()&&scene.buttons[size_t(ui.focus)].hold&&scene.buttons[size_t(ui.focus)].enabled){if(!ui.hold.accept_selected)ui.hold.select_accept(true);if(ui.hold.update(SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_RETURN]!=0,elapsed))activate(scene.buttons[size_t(ui.focus)],true);}else ui.hold.select_accept(false);

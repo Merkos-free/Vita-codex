@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 import zlib
 
 TITLE_ID = 'CVITA0001'
-VERSION = '00.20'
+VERSION = '00.21'
 IMAGES = {'sce_sys/icon0.png': (128,128),
           'sce_sys/livearea/contents/bg.png': (840,500),
           'sce_sys/livearea/contents/startup.png': (280,158)}
