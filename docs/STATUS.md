@@ -14,9 +14,9 @@ PR #7 объединён в `main` (`91501159e2278eac5a9b150622720ed880b263a5`).
 
 ## Проверки этого этапа
 
-Локально Linux: 121 Python tests; 49 network-model checks; 188 diff/parser/UI checks + 250 malformed samples под ASan/UBSan; восемь контрактных сценариев с настоящим Git в временном репозитории. Полная локальная HTTPS-серия остановлена timeout на ordering-тесте; НЕ засчитана как успех.
+Локально Linux: 121 Python tests; 49 network-model checks; 188 diff/parser/UI checks + 250 malformed samples под ASan/UBSan; восемь контрактных сценариев с настоящим Git в временном репозитории. Первая полная локальная HTTPS-серия остановлена timeout. Ordering-тест отдельно прошёл; повторная полная серия прошла: 11 tests за 53.357s. Первоначальная попытка не засчитывается.
 
-CI конкретного нового HEAD (source-tests, connected-client, vita-build и windows-companion) ещё требуется проверить перед merge. SDL/VitaSDK отсутствуют в локальном контейнере; реальный рендер и ARM-сборку выполняет CI. Результаты/артефакты фиксируются отдельно в PR.
+Для кода 06ff59da79ab0042ab8bc88135de403203ab6e32 прошли source-tests 37101496077, connected-client 37101496130, vita-build 37101496076 и windows-companion 37101496120. VPK 00.21 скачана и повторно проверена. Windows ZIP проверен по всем 996 записям manifest; восемь SDL BMP проверены на размер, четыре экрана осмотрены визуально. Подробности и SHA: docs/M3_DIFF_RESULTS.md. Последующий коммит документации проверяется отдельным CI перед merge; результаты в PR #9. SDL/VitaSDK отсутствуют локально, настоящий рендер и ARM-компиляцию выполнял CI.
 
 ## Ограничения остаются
 
