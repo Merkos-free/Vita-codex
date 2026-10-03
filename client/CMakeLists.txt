@@ -34,7 +34,7 @@ vita_create_self(codex_vita_ui.self codex_vita_ui)
 # Deliberately named UI prototype, not a working Codex client.
 # Title ID is provisional; check for collision before device installation.
 vita_create_vpk(codex-vita-ui-prototype.vpk CVITA0001 codex_vita_ui.self
-  VERSION 00.20 NAME "Codex Vita Test"
+  VERSION 00.21 NAME "Codex Vita Test"
   FILE "${ASSET_DIR}/icon0.png" "sce_sys/icon0.png"
   FILE "${ASSET_DIR}/bg.png" "sce_sys/livearea/contents/bg.png"
   FILE "${ASSET_DIR}/startup.png" "sce_sys/livearea/contents/startup.png"

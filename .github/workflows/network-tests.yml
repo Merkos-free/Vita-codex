@@ -24,6 +24,12 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/network_model_test.cpp client/shared/https.cpp $(pkg-config --cflags --libs libcurl) -o build/host/network-model
           g++ -std=c++17 -Wall -Wextra -Werror -pedantic client/host/probe.cpp client/shared/https.cpp $(pkg-config --cflags --libs libcurl) -o build/host/probe
           build/host/network-model
+      - name: Bounded diff, shared UI and generated Git patch contracts
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer tests/diff_review_test.cpp client/shared/https.cpp $(pkg-config --cflags --libs libcurl) -o build/host/diff-review
+          build/host/diff-review
+          g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/diff_parser_probe.cpp -o build/host/diff-probe
+          CV_DIFF_PROBE="$PWD/build/host/diff-probe" python3 tests/diff_git_contracts.py -v
       - name: Native HTTPS end-to-end (explicit fake Codex, no account)
         env:
           CV_NATIVE_PROBE: ${{ github.workspace }}/build/host/probe

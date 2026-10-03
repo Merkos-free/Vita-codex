@@ -43,15 +43,15 @@ uint16_t ime_buffer[SCE_IME_DIALOG_MAX_TEXT_LENGTH+1]{};
 std::vector<uint16_t> initial,title;
 void begin_input(cv::Input kind){
     if(kind==cv::Input::None||input!=cv::Input::None)return;
-    const std::string value=kind==cv::Input::Draft?session->draft:kind==cv::Input::Endpoint?session->endpoint:"";
-    title=cv::to_ime(kind==cv::Input::Draft?"Задание для Codex":kind==cv::Input::Endpoint?"HTTPS-адрес компьютера":"Одноразовый код с компьютера",SCE_IME_DIALOG_MAX_TITLE_LENGTH);
+    const std::string value=ui.initial_text(*session,kind);
+    title=cv::to_ime(kind==cv::Input::Draft?"Задание для Codex":kind==cv::Input::Endpoint?"HTTPS-адрес компьютера":kind==cv::Input::Search?"Поиск в изменениях":"Одноразовый код с компьютера",SCE_IME_DIALOG_MAX_TITLE_LENGTH);
     initial=cv::to_ime(value,SCE_IME_DIALOG_MAX_TEXT_LENGTH);
     std::memset(ime_buffer,0,sizeof ime_buffer);
     SceImeDialogParam p;sceImeDialogParamInit(&p);
     p.supportedLanguages=SCE_IME_LANGUAGE_ENGLISH|SCE_IME_LANGUAGE_RUSSIAN;
     p.languagesForced=SCE_FALSE;p.type=SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;
     p.textBoxMode=SCE_IME_DIALOG_TEXTBOX_MODE_DEFAULT;p.dialogMode=SCE_IME_DIALOG_DIALOG_MODE_WITH_CANCEL;
-    p.title=title.data();p.initialText=initial.data();p.maxTextLength=kind==cv::Input::Pin?6:SCE_IME_DIALOG_MAX_TEXT_LENGTH;p.inputTextBuffer=ime_buffer;
+    p.title=title.data();p.initialText=initial.data();p.maxTextLength=kind==cv::Input::Pin?6:kind==cv::Input::Search?128:SCE_IME_DIALOG_MAX_TEXT_LENGTH;p.inputTextBuffer=ime_buffer;
     if(sceImeDialogInit(&p)<0)session->notice="Не удалось открыть клавиатуру";else input=kind;
 }
 void poll_input(){
@@ -106,18 +106,17 @@ int main(){
                 if(pressed&SCE_CTRL_START)running=false;
                 if(pressed&SCE_CTRL_LTRIGGER){ui.tab(-1);mic.stop();}
                 if(pressed&SCE_CTRL_RTRIGGER){ui.tab(1);mic.stop();}
-                if(pressed&SCE_CTRL_CIRCLE){if(ui.page==cv::Page::Projects){ui.threads_mode=false;ui.list_selected=ui.focus=0;}else ui.jump(cv::Page::Projects);mic.stop();}
+                if(pressed&SCE_CTRL_CIRCLE){ui.back();mic.stop();}
                 if(pressed&SCE_CTRL_SELECT){if(!connection.uncertain.empty())connection.reconcile();connection.refresh();}
                 if(now>=next_repeat&&(pad.buttons&(SCE_CTRL_UP|SCE_CTRL_DOWN))){
                     int dir=(pad.buttons&SCE_CTRL_DOWN)?1:-1;
-                    if(ui.page==cv::Page::Projects){const auto count=ui.threads_mode?connection.threads.size():connection.projects.size();if(count){ui.list_selected=std::clamp(ui.list_selected+dir,0,int(count)-1);ui.focus=ui.list_selected%5;}}
-                    else ui.scroll=std::clamp(ui.scroll+dir*28,0,ui.max_scroll);
+                    ui.vertical(connection,dir);
                     next_repeat=now+110000;ui.hold.select_accept(false);
                 }
                 scene=ui.draw(connection,[](const std::string& text,int size){return vita2d_pgf_text_width(font,float(size)/20.0f,text.c_str());});
                 if(!scene.buttons.empty()){
-                    if(pressed&SCE_CTRL_LEFT)ui.focus=(ui.focus+int(scene.buttons.size())-1)%int(scene.buttons.size());
-                    if(pressed&SCE_CTRL_RIGHT)ui.focus=(ui.focus+1)%int(scene.buttons.size());
+                    if(pressed&SCE_CTRL_LEFT)ui.focus_by(-1,scene.buttons.size());
+                    if(pressed&SCE_CTRL_RIGHT)ui.focus_by(1,scene.buttons.size());
                     ui.focus=std::clamp(ui.focus,0,int(scene.buttons.size())-1);
                     const auto& b=scene.buttons[size_t(ui.focus)];
                     if(pressed&SCE_CTRL_CROSS)begin_input(ui.activate(connection,b));
@@ -125,15 +124,16 @@ int main(){
                     else ui.hold.select_accept(false);
                 }
                 SceTouchData touch{};sceTouchPeek(SCE_TOUCH_PORT_FRONT,&touch,1);
-                if(touch.reportNum&&!touch_before){int x=touch.report[0].x/2,y=touch.report[0].y/2;
-                    for(int i=0;i<6;++i)if(cv::inside({16+156*i,58,148,40},x,y)){ui.jump(static_cast<cv::Page>(i));mic.stop();}
-                    for(size_t i=0;i<scene.buttons.size();++i)if(cv::inside(scene.buttons[i].rect,x,y)){ui.focus=int(i);begin_input(ui.activate(connection,scene.buttons[i]));}
+                if(touch.reportNum&&!touch_before){
+                    scene=ui.draw(connection,[](const std::string& text,int size){return vita2d_pgf_text_width(font,float(size)/20.0f,text.c_str());});
+                    begin_input(ui.tap(connection,scene,touch.report[0].x/2,touch.report[0].y/2));
                 }
                 touch_before=touch.reportNum!=0;
                 if(ui.mic_requested&&!mic.active()){if(callback_ready){mic.start();}else{connection.notice="Микрофон отключён: power callback недоступен";ui.mic_requested=false;}}
                 if(!ui.mic_requested)mic.stop();
                 mic.tick();if(ui.mic_requested&&!mic.active())ui.mic_requested=false;
             }
+            scene=ui.draw(connection,[](const std::string& text,int size){return vita2d_pgf_text_width(font,float(size)/20.0f,text.c_str());});
             vita2d_start_drawing();vita2d_clear_screen();
             for(const auto& p:scene.panels){if(p.first.w<16)vita2d_draw_rectangle(p.first.x,p.first.y,p.first.w,p.first.h,rgba(p.second));else box(p.first,p.second);}
             for(size_t i=0;i<scene.buttons.size();++i){const auto& b=scene.buttons[i];box(b.rect,b.enabled?(int(i)==ui.focus?cv::Accent:0x243447):0x1b232c);vita2d_pgf_draw_text(font,b.rect.x+12,b.rect.y+26,rgba(b.enabled&&int(i)==ui.focus?cv::Background:cv::Muted),0.9f,b.title.c_str());}
