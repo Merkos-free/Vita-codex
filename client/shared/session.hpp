@@ -7,9 +7,10 @@
 
 namespace cv {
 class Session {
-    struct Pending {std::string operation,project,thread,request_id;};
+    struct Pending {std::string operation,project,thread,request_id;unsigned long long revision=0;};
     Https net;
     unsigned sequence=0;
+    unsigned long long revision=0; // Discard snapshots captured before a state-changing request.
     std::string token;
     std::map<unsigned,Pending> pending;
     std::map<std::string,Pending> unresolved;
@@ -22,7 +23,8 @@ class Session {
         auto body=Json::obj({{"operation",Json(op)},{"data",data}});
         if(mutation)body.object["requestId"]=Json(ticket);
         if(!net.start(id,endpoint,ca_file,"/v1/action",body.dump(),token)){notice="Не удалось начать запрос";return false;}
-        pending[id]={op,project,thread,mutation?ticket:(op=="requestStatus"?data.at("requestId").str():"")};
+        if(mutation){++revision;stale=true;}
+        pending[id]={op,project,thread,mutation?ticket:(op=="requestStatus"?data.at("requestId").str():""),revision};
         return true;
     }
     Json scope()const{return Json::obj({{"project",Json(project)},{"thread",Json(thread)}});}
@@ -49,12 +51,14 @@ class Session {
         } else if(p.operation=="newThread"||p.operation=="resume") {
             const auto ident=value.at("threadId").str();
             if(ident.empty()||ident.size()>160)throw std::runtime_error("Некорректный ID диалога");
-            thread=ident;view=Json::obj();refresh();
+            ++revision;stale=true;thread=ident;view=Json::obj();refresh();
         } else if(p.thread!=thread)return;
         else if(p.operation=="snapshot") {
             if(value.at("threadId").str()!=thread)throw std::runtime_error("Ответ от другого диалога");
+            if(p.revision!=revision){refresh();return;}
             view=value;stale=false;
         } else if(p.operation=="send"||p.operation=="approval"||p.operation=="interrupt") {
+            ++revision;stale=true;
             notice=p.operation=="send"?"Задание принято; ожидается результат":"Запрос принят; ожидается состояние";
             refresh();
         }
@@ -100,9 +104,9 @@ public:
         }
     }
     bool choose_project(size_t i) {
-        if(!ready||busy()||!uncertain.empty()||i>=projects.size())return false;
+        if(!ready||busy()||has("threads")||!uncertain.empty()||i>=projects.size())return false;
         const auto id=projects[i].at("id").str();if(id.empty()||id.size()>80)return false;
-        project=id;thread.clear();threads.clear();view=Json::obj();stale=true;
+        ++revision;project=id;thread.clear();threads.clear();next_cursor.clear();view=Json::obj();stale=true;
         return post("threads",Json::obj({{"project",Json(project)}}));
     }
     bool more_threads() {
@@ -132,9 +136,10 @@ public:
     }
     bool reconcile(){return !uncertain.empty()&&post("requestStatus",Json::obj({{"requestId",Json(uncertain)}}));}
     void suspend(){
+        ++revision;
         for(const auto& p:pending)if(p.second.operation!="requestStatus")mark_uncertain(p.second);
         net.cancel();pending.clear();stale=true;notice="Пауза. Обновите состояние; задания не повторяются.";
     }
-    void disconnect(){net.cancel();pending.clear();std::fill(token.begin(),token.end(),0);token.clear();ready=false;stale=true;projects.clear();threads.clear();project.clear();thread.clear();view=Json::obj();unresolved.clear();uncertain.clear();notice="Отключено. Активные задачи на ПК могли продолжиться.";}
+    void disconnect(){++revision;net.cancel();pending.clear();std::fill(token.begin(),token.end(),0);token.clear();ready=false;stale=true;projects.clear();threads.clear();project.clear();thread.clear();view=Json::obj();unresolved.clear();uncertain.clear();next_cursor.clear();notice="Отключено. Активные задачи на ПК могли продолжиться.";}
 };
 } // namespace cv

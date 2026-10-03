@@ -22,7 +22,9 @@ int main(int argc,char** argv){
             else if(op=="suspend"){s.suspend();accepted=true;}
             else if(op=="pump")accepted=true;
             else if(op=="quit")break;
-            for(int i=0;i<200;++i){s.poll();std::this_thread::sleep_for(std::chrono::milliseconds(5));}
+            int ticks=cmd.at("ticks").type==cv::Json::Type::Number?std::stoi(cmd.at("ticks").scalar):200;
+            ticks=std::clamp(ticks,0,400);
+            for(int i=0;i<ticks;++i){s.poll();std::this_thread::sleep_for(std::chrono::milliseconds(5));}
             auto result=cv::Json::obj({{"accepted",cv::Json::boolean(accepted)},{"ready",cv::Json::boolean(s.ready)},
                 {"stale",cv::Json::boolean(s.stale)},{"canSend",cv::Json::boolean(s.can_send())},{"notice",cv::Json(s.notice)},
                 {"thread",cv::Json(s.thread)},{"projects",cv::Json::list(s.projects)},{"view",s.view}});

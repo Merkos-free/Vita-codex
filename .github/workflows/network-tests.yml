@@ -27,7 +27,7 @@ jobs:
       - name: Native HTTPS end-to-end (explicit fake Codex, no account)
         env:
           CV_NATIVE_PROBE: ${{ github.workspace }}/build/host/probe
-        run: python3 tests/native_e2e.py -v
+        run: python3 tests/native_ordering_e2e.py -v
       - name: Build desktop renderer with the same UI components
         run: g++ -std=c++17 -Wall -Wextra -Werror -pedantic client/host/desktop.cpp client/shared/https.cpp $(pkg-config --cflags --libs sdl2 SDL2_ttf libcurl) -o build/host/codex-vita-desktop
       - name: Capture explicit fixture screens (NOT Vita hardware)
@@ -59,19 +59,5 @@ jobs:
         with:
           name: codex-no-account-${{ matrix.os }}-${{ github.sha }}
           path: build/codex-no-account.json
-          retention-days: 7
-          if-no-files-found: error
-  source-snapshot:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - run: git archive --format=zip HEAD -o source.zip
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: connected-client-source-${{ github.sha }}
-          path: source.zip
           retention-days: 7
           if-no-files-found: error
