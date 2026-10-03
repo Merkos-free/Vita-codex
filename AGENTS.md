@@ -1,43 +1,37 @@
 # Codex Vita: инструкции разработчику
 
-Прочитать README.md, docs/STATUS.md, docs/ROADMAP.md, docs/VOICE.md, SECURITY.md.
-Работать только в `Merkos-free/Vita-codex`. Владелец создал этот репозиторий публичным. Не менять видимость, не трогать другие проекты, не force-push. Изменения через отдельные ветки и PR; не публиковать секреты, аудио, auth.json или личные настройки.
+Работать только в `Merkos-free/Vita-codex`. Прочитать README, docs/STATUS.md, docs/ROADMAP.md, docs/VOICE.md, docs/WINDOWS_COMPANION.md и SECURITY.md. Репозиторий публичный по решению владельца; видимость не менять. Ветки и PR, без force-push, чужих проектов, секретов, auth.json, аудио, private keys или личных настроек в Git.
 
 ## Непересматриваемые требования
 
-- Нативный UI Vita; не заменять его браузером/удалённым рабочим столом/терминалом без решения владельца.
-- Codex на компьютере с ChatGPT-login. Не отправлять credentials на Vita и не переиспользовать внутренние токены через самодельные HTTP endpoints.
-- Голос только через встроенную функцию Codex. Нет платной API-подмены, Whisper, локальной модели или иного провайдера без нового решения владельца.
-- Наличие audio/realtime в схеме не доказывает доступность Dictate или отсутствие дополнительных начислений.
-- Не рисовать фиктивные online/progress/results. Не выдавать mock-тесты за проверку устройства или аккаунта.
-- Не копировать Vela/WoozyLLM без ясной лицензии; не включать сторонние шрифты.
-- Нет raw-RPC, unsandboxed shell, accept-for-session, auto-approve, TLS bypass и автоматического подключения пользовательских папок.
-- Консервативный default read-only; разрешения не повышаются автоматически при несовместимости протокола.
-- Схема установленного Codex важнее примеров документации. Проверять конкретные поля, а не совпадения enum во всём JSON.
+- Нативный UI Vita. Не заменять браузером/удалённым рабочим столом/терминалом без нового решения владельца.
+- Официальный Codex на компьютере с ChatGPT-login. Credentials не передаются на Vita и не используются для самодельных вызовов внутренних endpoints.
+- Голос — встроенная диктовка самого Codex. Нет платного STT API, Whisper, локальной модели или подмены провайдера. Audio/realtime в схеме не доказывает Dictate или условия тарифа. Пока voiceValidated=false.
+- Никаких фиктивных online/results в обычном приложении. Fixtures только в тестах и маркированном capture-режиме. Не выдавать компиляцию/host-tests за аппаратный или аккаунтный тест.
+- Не копировать Vela/WoozyLLM без ясной лицензии; не включать сторонние файлы шрифтов.
+- Нет raw-RPC, unsandboxed shell, accept-for-session, auto-approve, TLS bypass и автоматического подключения личных папок.
+- Default read-only; права не повышаются при несовместимости. GUI Companion принимает только read-only/on-request и явную тестовую папку. Проектная allowlist не доказывает фактическую sandbox-изоляцию чтения/MCP.
+- Проверять конкретные поля схемы установленного Codex, не совпадения enum по всему JSON.
+- Не выставлять Bridge в интернет, не менять firewall/NAT автоматически, не создавать платные ресурсы.
 
-## Состояние после M1 cross-build
+## Автономность
 
-72 Python tests (55 bridge/compatibility + 17 packaging), 35 grouped UI-model checks, 23 grouped native-input checks. Реальная ARM-кросс-сборка VPK 00.11 прошла; скачанный пакет повторно проверен. Точные коммит, CI runs, digest SDK и SHA-256 в docs/M1_BUILD_RESULTS.md. Это НЕ аппаратная проверка и НЕ работа с аккаунтом владельца. Native HTTPS и штатная диктовка ещё не написаны.
+Владелец явно отложил промежуточную аппаратную проверку. Продолжать UI/сеть/Windows/CI без требования фото Vita. Hardware/account gates #2/#3/#4 не закрывать без фактического результата. Штатная диктовка #5 остаётся отдельной проверкой возможности.
 
-## Следующее
+## Текущая реализация
 
-1. Проверять CI конкретного HEAD; прежний успешный прогон не доказывает последующие коммиты.
-2. Hardware smoke-test по docs/HARDWARE_TEST.md; не закрывать #2 по одной компиляции. Не ставить firmware/plugins и не перезаписывать чужой Title ID.
-3. Реальный Codex на Windows: doctor, ChatGPT-login, read-only scratch thread, проверка эффективных разрешений (#3).
-4. Асинхронный native HTTPS с лимитами JSON, проверкой сертификата, сопряжением и восстановлением после разрыва без повторного исполнения (#4).
-5. Штатная диктовка как отдельный gate (#5), без платной запасной реализации.
-6. Перед стабильным публичным релизом закончить аудит лицензий статически включаемых библиотек/нотисов и аппаратную матрицу. Текущий artifact — тестовый, не stable release.
+Общий C++ Session/HTTPS/Ui и SDL desktop renderer; VPK 00.20. Bridge protocol v2 с обязательным requestId мутаций. Журнал только RAM, не exactly-once после перезапуска. Не повторять неизвестную операцию; токены отзываются после остановки. Snapshot revision fencing не позволяет старому idle-снимку разрешить отправку после нового задания.
+
+Windows Companion: `run_companion.py`, `companion.py` и `gui.py`; одно рабочее выполнение, thread-safe immutable status, Tk обновляется только на главном потоке. Остановка отзывает токены, но не обещает rollback или убийство всех фоновых процессов. ZIP для Vita содержит только CA, endpoint, fingerprint. GUI-окно не запускает сервер/логин/модель автоматически.
 
 ## Проверки
 
-```sh
-python -m unittest discover -s tests -v
-g++ -std=c++17 -Wall -Wextra -Werror -pedantic tests/ui_model_test.cpp -o ui_model_test
-./ui_model_test
-g++ -std=c++17 -Wall -Wextra -Werror -pedantic -Itests/fixtures/vita_sdk tests/native_input_test.cpp client/src/microphone.cpp -o native_input_test
-./native_input_test
-```
+- `python -m unittest discover -s tests -v` — 121 тест на этапе companion.
+- C++ ui_model_test: 35 grouped checks; native_input_test: 23 checks с SDK doubles, не устройство.
+- network-tests.yml: общий C++ клиент, HTTPS E2E через native_ordering_e2e.py, официальный Codex 0.155.1 без аккаунта и шесть маркированных desktop BMP.
+- windows-companion.yml: real Tk contract-test, Windows portable build и запуск готовой EXE в idle. Codex/Node/OpenSSL не поставляются в этом пакете. Файлы шрифтов запрещены проверкой пакета.
+- vita-build.yml: hash-pinned curl/SDK, компиляция без сети/credentials, VPK validator. SDK doubles не попадают в настоящий include path.
 
-Vita build: `.github/workflows/vita-build.yml` и docs/BUILD.md. SDK doubles используются только в host-тесте, никогда в include path настоящего клиента. Проверка VPK: `python scripts/verify_vpk.py build/vita/codex-vita-ui-prototype.vpk`.
+Перед merge проверить CI конкретного HEAD. Обновлять STATUS/PR реальными результатами, не переписывать исторические отчёты как текущие. Полный лицензионный аудит перед stable остаётся открытым.
 
-Обновлять docs/STATUS.md после этапа. Не менять отчёты на «успех», пока соответствующие проверки не выполнены. Старые docs/TEST_RESULTS.md и docs/test-run.txt относятся к bootstrap-этапу; M1 имеет отдельный датированный отчёт.
+Следующие автономные задачи: per-file diff/поиск, UI-state/layout тесты, улучшение диагностики, исследование штатной Dictate-функции. Не пересоздавать существующие компоненты и не раздувать количество UI-фреймворков без необходимости.

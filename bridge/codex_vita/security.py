@@ -37,6 +37,15 @@ class Pairing:
             deadline = self._tokens.get(digest)
             return deadline is not None and self.clock() < deadline
 
+    def local_status(self) -> dict:
+        """For the local desktop only. Never expose the PIN via an HTTP route."""
+        with self._lock:
+            now = self.clock()
+            seconds = max(0, int(self.deadline - now))
+            open_pin = not self.used and seconds > 0 and self.attempts < 5
+            return {"pin": self.pin if open_pin else "", "seconds": seconds if open_pin else 0,
+                    "paired": any(now < expiry for expiry in self._tokens.values())}
+
     def revoke_all(self) -> None:
         with self._lock:
             self._tokens.clear()

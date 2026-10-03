@@ -17,3 +17,5 @@ ui_model_test.exe
 *.key
 auth.json
 config.local.json
+
+.ci-codex/

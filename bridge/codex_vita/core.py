@@ -7,6 +7,7 @@ import threading
 import time
 from collections import deque
 from .security import Projects
+from . import history
 
 APPROVAL_METHODS = {"item/commandExecution/requestApproval", "item/fileChange/requestApproval"}
 TEXT_LIMIT = 64 * 1024
@@ -14,7 +15,7 @@ TEXT_LIMIT = 64 * 1024
 class Bridge:
     def __init__(self, rpc, projects: Projects, approval_policy="onRequest", sandbox="readOnly"):
         if approval_policy not in ("onRequest", "on-request"):
-            raise ValueError("Only on-request approvals are supported; retired untrusted modes are rejected")
+            raise ValueError("Only on-request approvals are supported; other modes are intentionally disabled")
         if sandbox not in ("readOnly", "read-only", "workspaceWrite", "workspace-write"):
             raise ValueError("Only read-only or explicitly configured workspace-write is allowed")
         self.rpc, self.projects = rpc, projects
@@ -48,7 +49,7 @@ class Bridge:
         with self._lock:
             self.threads[ident] = project
             self.views.setdefault(ident, {"threadId": ident, "text": "", "turnId": None,
-                "status": "idle", "diff": "", "tools": [], "truncated": False})
+                "status": "idle", "diff": "", "tools": [], "truncated": False, "messages": [], "historyTruncated": False})
         return ident
 
     def _settings(self, project: str) -> dict:
@@ -63,7 +64,7 @@ class Bridge:
     def dispatch(self, operation: str, data: dict) -> dict:
         if not isinstance(data, dict):
             raise ValueError("data must be an object")
-        # Only data snapshots/approvals can proceed concurrently with a long RPC.
+        # Snapshots, approvals and interrupt can proceed concurrently with a long RPC.
         if operation == "snapshot":
             self._scope(data.get("project"), data.get("thread"))
             self.expire_approvals()
@@ -74,16 +75,26 @@ class Bridge:
                 return result
         if operation == "approval":
             return self.decide(data)
+        if operation == "interrupt":
+            # Control-plane request must not queue behind turn/start or thread/list.
+            self._scope(data.get("project"), data.get("thread"))
+            self.require_chatgpt()
+            with self._lock:
+                turn = self.views[data["thread"]]["turnId"]
+            if not turn:
+                raise ValueError("No known active turn to interrupt")
+            self.rpc.request("turn/interrupt", {"threadId": data["thread"], "turnId": turn})
+            return {"requested": True}
         if operation == "status":
             self.require_chatgpt()
             return {"version": "0.1.0-dev", "codex": "connected", "authMode": "chatgpt",
                 "voice": {"state": "unverified", "enabled": False, "paidApiFallback": False},
-                "nativeHardwareTested": False}
+                "nativeHardwareTested": False, "protocolVersion": 2}
         if operation == "projects":
             return {"projects": [{"id": x["id"], "name": x["name"]}
                                  for x in self.projects.entries.values()]}
         # Reject unknown methods BEFORE contacting Codex.
-        if operation not in {"threads", "newThread", "resume", "send", "interrupt", "models"}:
+        if operation not in {"threads", "newThread", "resume", "send", "models"}:
             raise ValueError("Unsupported operation")
         with self._op_lock:
             self.require_chatgpt()
@@ -111,12 +122,35 @@ class Bridge:
                 raise ValueError("Invalid thread id")
             if operation == "resume":
                 # Read and verify cwd before resuming or overriding any settings.
+                with self._lock:
+                    fresh_view = thread not in self.views
                 stored = self.rpc.request("thread/read", {"threadId": thread, "includeTurns": False})
                 self._remember(project, stored["thread"])
                 result = self.rpc.request("thread/resume", {"threadId": thread, **self._settings(project)})
                 self._remember(project, result["thread"])
                 with self._lock:
                     self.views[thread]["text"] = self._history_text(result["thread"])
+                    self.views[thread]["messages"], self.views[thread]["historyTruncated"] = history.from_thread(result["thread"])
+                    # A newly resumed thread may already have an active turn. Never
+                    # present it as idle merely because this bridge just started.
+                    view = self.views[thread]
+                    if fresh_view and view["status"] == "idle":
+                        restored = result["thread"]
+                        turns = restored.get("turns", [])
+                        last = turns[-1] if turns else {}
+                        live = restored.get("status", {})
+                        kind = live.get("type") if isinstance(live, dict) else live
+                        view["turnId"] = last.get("id")
+                        if kind == "active" or last.get("status") == "inProgress":
+                            view["status"] = "inProgress"
+                        elif kind in ("systemError", "notLoaded"):
+                            view["status"] = "unknown"
+                        elif not turns:
+                            view["status"] = "idle"
+                        else:
+                            status = last.get("status")
+                            view["status"] = status if status in ("completed", "interrupted", "failed") else "unknown"
+                    # Existing unknown/running views are intentionally never reset here.
                 return {"threadId": thread}
             self._scope(project, thread)
             if operation == "send":
@@ -142,12 +176,7 @@ class Bridge:
                     with self._lock:
                         self.views[thread]["status"] = "unknown"
                     raise  # Never automatically retry: execution may already have started.
-            with self._lock:
-                turn = self.views[thread]["turnId"]
-            if not turn:
-                raise ValueError("No known active turn to interrupt")
-            self.rpc.request("turn/interrupt", {"threadId": thread, "turnId": turn})
-            return {"requested": True}  # Completion is confirmed by a subsequent event.
+            raise ValueError("Unsupported operation")
 
     @staticmethod
     def _history_text(thread: dict) -> str:
@@ -222,6 +251,7 @@ class Bridge:
                 elif item.get("type") in ("commandExecution", "fileChange"):
                     compact = {k: item.get(k) for k in ("id", "type", "status", "command", "exitCode")}
                     view["tools"] = [x for x in view["tools"] if x["id"] != compact["id"]][-19:] + [compact]
+            history.apply_event(view, method, params)
             self.event_seq += 1
             self.events.append({"seq": self.event_seq, "threadId": tid, "method": method})
 

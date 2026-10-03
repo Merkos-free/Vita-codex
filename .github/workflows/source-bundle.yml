@@ -1,0 +1,28 @@
+name: source-bundle
+on:
+  push:
+    branches: [main, 'feat/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Archive tracked source only
+        run: |
+          mkdir -p build/source-bundle
+          git archive --format=zip HEAD -o build/source-bundle/source.zip
+          git rev-parse HEAD > build/source-bundle/source-commit.txt
+          cd build/source-bundle
+          sha256sum source.zip > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: codex-vita-source-${{ github.sha }}
+          path: build/source-bundle/
+          if-no-files-found: error
+          retention-days: 14

@@ -14,7 +14,7 @@ def load(name):
     return module
 assets=load('make_vita_assets'); vpk=load('verify_vpk')
 
-def sfo(title='CVITA0001',version='00.11',category='gd'):
+def sfo(title='CVITA0001',version='00.20',category='gd'):
     keys=bytearray(); data=bytearray(); entries=bytearray()
     for key,value in {'TITLE_ID':title,'APP_VER':version,'CATEGORY':category}.items():
         value=value.encode()+b'\0'

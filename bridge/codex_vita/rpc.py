@@ -29,6 +29,11 @@ class RpcClient:
         self.process: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
 
+    @property
+    def alive(self) -> bool:
+        with self._lock:
+            return not self._closed and self.process is not None and self.process.poll() is None
+
     def start(self) -> dict:
         env = os.environ.copy()
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY"):

@@ -1,0 +1,58 @@
+name: windows-companion
+on:
+  push:
+    branches: [main, 'feat/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: companion-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  portable:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Test lifecycle, TLS and public export (explicit fake Codex)
+        run: python -m unittest discover -s tests -p test_companion.py -v
+      - name: Verify real Tk configuration selection and window layout
+        run: python scripts/gui_contract_check.py
+      - name: Build unsigned portable folder on Windows
+        run: |
+          python -m pip install --only-binary=:all: pyinstaller==6.22.3
+          python -m PyInstaller --noconfirm --clean --onedir --windowed --name CodexVitaBridge --paths bridge --specpath build --distpath build/dist --workpath build/pyinstaller run_companion.py
+          python -m pip freeze > build/build-dependencies.txt
+      - name: Launch real EXE without user account or connection
+        run: python scripts/companion_smoke.py build/dist/CodexVitaBridge/CodexVitaBridge.exe build/packaged-gui-smoke.json
+      - name: Prepare owner test bundle and file digests
+        shell: pwsh
+        run: |
+          Copy-Item docs/WINDOWS_COMPANION.md build/dist/CodexVitaBridge/README-TEST.md
+          Copy-Item THIRD_PARTY_NOTICES.md build/dist/CodexVitaBridge/
+          Copy-Item "$env:pythonLocation/LICENSE.txt" build/dist/CodexVitaBridge/PYTHON-LICENSE.txt
+          git rev-parse HEAD | Out-File -Encoding utf8 build/dist/CodexVitaBridge/source-commit.txt
+          $fonts = Get-ChildItem build/dist/CodexVitaBridge -Recurse -File | Where-Object { $_.Extension -in '.ttf','.otf','.woff','.woff2','.ttc' }
+          if ($fonts) { throw 'Font files must not be distributed' }
+          Get-ChildItem build/dist/CodexVitaBridge -Recurse -File | ForEach-Object { $h = Get-FileHash $_.FullName -Algorithm SHA256; "$($h.Hash)  $($_.FullName.Substring((Resolve-Path build/dist/CodexVitaBridge).Path.Length + 1))" } | Out-File -Encoding utf8 build/dist/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-companion-test-${{ github.sha }}
+          path: build/dist/
+          retention-days: 14
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: windows-companion-evidence-${{ github.sha }}
+          path: |
+            build/packaged-gui-smoke.json
+            build/build-dependencies.txt
+          retention-days: 14
+          if-no-files-found: warn
